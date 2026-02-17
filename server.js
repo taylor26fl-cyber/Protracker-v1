@@ -1318,3 +1318,184 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
 // ===========================
 
 
+// ===========================
+// Render Disk Support: persist db.json on /var/data when available
+// Append-only. Paste at bottom of server.js
+// ===========================
+
+(function () {
+  const path = require("path");
+  const fs = require("fs");
+
+  // Prefer Render disk if it exists
+  const RENDER_DISK_DIR = "/var/data";
+  const diskExists = (() => {
+    try {
+      return fs.existsSync(RENDER_DISK_DIR) && fs.statSync(RENDER_DISK_DIR).isDirectory();
+    } catch {
+      return false;
+    }
+  })();
+
+  // This becomes the DB file path your readDB/writeDB should use
+  const DB_FILE_OVERRIDE = diskExists
+    ? path.join(RENDER_DISK_DIR, "db.json")
+    : path.join(__dirname, "db.json");
+
+  // Expose for debugging/versioning
+  app.get("/api/storage", (req, res) => {
+    res.json({
+      ok: true,
+      diskExists,
+      dbFile: DB_FILE_OVERRIDE
+    });
+  });
+
+  // Monkey-patch readDB/writeDB if your server.js uses DB_FILE constant.
+  // We safely replace globalThis.__PT_DB_FILE if your code checks it.
+  // If your existing readDB/writeDB reads from ./db.json directly,
+  // we provide new helpers that server can use going forward.
+  globalThis.__PT_DB_FILE = DB_FILE_OVERRIDE;
+
+  // NOTE:
+  // If your current readDB/writeDB already uses globalThis.__PT_DB_FILE or a DB_FILE var,
+  // you’re done.
+  // If not, tell me and I will give you the exact minimal edit block to switch paths.
+})();
+
+// ===========================
+// BOTTOM-ONLY: Render Disk Sync Shim for db.json
+// Goal: persist DB across Render restarts without editing existing readDB/writeDB.
+// Strategy:
+// - If /var/data exists: keep an authoritative copy at /var/data/db.json
+// - On boot: if /var/data/db.json exists and ./db.json is missing or older -> copy disk -> local
+// - Else if ./db.json exists and disk missing -> copy local -> disk
+// - Provides /api/storage and /api/storage/sync for manual control
+// ===========================
+
+(function () {
+  const fs = require("fs");
+  const fsp = fs.promises;
+  const path = require("path");
+
+  const LOCAL_DB = path.join(__dirname, "db.json");
+  const DISK_DIR = "/var/data";
+  const DISK_DB = path.join(DISK_DIR, "db.json");
+
+  function exists(p) {
+    try { fs.accessSync(p); return true; } catch { return false; }
+  }
+  function statSafe(p) {
+    try { return fs.statSync(p); } catch { return null; }
+  }
+
+  async function copyFileSafe(src, dst) {
+    await fsp.mkdir(path.dirname(dst), { recursive: true });
+    const tmp = dst + ".tmp";
+    await fsp.copyFile(src, tmp);
+    await fsp.rename(tmp, dst);
+  }
+
+  async function bootSync() {
+    const diskOk = exists(DISK_DIR) && statSafe(DISK_DIR)?.isDirectory();
+    if (!diskOk) return { ok: true, disk: false, action: "none" };
+
+    const localExists = exists(LOCAL_DB);
+    const diskExists = exists(DISK_DB);
+
+    // If disk has DB but local doesn't -> pull from disk
+    if (diskExists && !localExists) {
+      await copyFileSafe(DISK_DB, LOCAL_DB);
+      return { ok: true, disk: true, action: "pulled_disk_to_local" };
+    }
+
+    // If local has DB but disk doesn't -> push to disk
+    if (localExists && !diskExists) {
+      await copyFileSafe(LOCAL_DB, DISK_DB);
+      return { ok: true, disk: true, action: "pushed_local_to_disk" };
+    }
+
+    // If both exist -> prefer newer by mtime
+    if (localExists && diskExists) {
+      const ls = statSafe(LOCAL_DB);
+      const ds = statSafe(DISK_DB);
+      const localM = ls ? ls.mtimeMs : 0;
+      const diskM = ds ? ds.mtimeMs : 0;
+
+      if (diskM > localM + 1) {
+        await copyFileSafe(DISK_DB, LOCAL_DB);
+        return { ok: true, disk: true, action: "pulled_newer_disk_to_local" };
+      }
+      if (localM > diskM + 1) {
+        await copyFileSafe(LOCAL_DB, DISK_DB);
+        return { ok: true, disk: true, action: "pushed_newer_local_to_disk" };
+      }
+      return { ok: true, disk: true, action: "already_in_sync" };
+    }
+
+    return { ok: true, disk: true, action: "none" };
+  }
+
+  // Run once on boot (do not crash server if sync fails)
+  bootSync().catch((e) => console.warn("[RenderDiskSync] bootSync failed:", e?.message || e));
+
+  // Storage info endpoint
+  app.get("/api/storage", async (req, res) => {
+    try {
+      const diskOk = exists(DISK_DIR) && statSafe(DISK_DIR)?.isDirectory();
+      const ls = statSafe(LOCAL_DB);
+      const ds = statSafe(DISK_DB);
+
+      res.json({
+        ok: true,
+        diskExists: diskOk,
+        localDb: {
+          path: LOCAL_DB,
+          exists: !!ls,
+          mtimeMs: ls ? ls.mtimeMs : null,
+          size: ls ? ls.size : null
+        },
+        diskDb: {
+          path: DISK_DB,
+          exists: !!ds,
+          mtimeMs: ds ? ds.mtimeMs : null,
+          size: ds ? ds.size : null
+        }
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  // Manual sync trigger (POST) to push local->disk or pull disk->local
+  app.post("/api/storage/sync", express.json(), async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const mode = String(body.mode || "auto").toLowerCase(); // auto|push|pull
+
+      const diskOk = exists(DISK_DIR) && statSafe(DISK_DIR)?.isDirectory();
+      if (!diskOk) return res.status(400).json({ ok: false, error: "Render disk not present at /var/data" });
+
+      const localExists = exists(LOCAL_DB);
+      const diskExists = exists(DISK_DB);
+
+      if (mode === "push") {
+        if (!localExists) return res.status(400).json({ ok: false, error: "Local db.json missing" });
+        await copyFileSafe(LOCAL_DB, DISK_DB);
+        return res.json({ ok: true, action: "pushed_local_to_disk" });
+      }
+
+      if (mode === "pull") {
+        if (!diskExists) return res.status(400).json({ ok: false, error: "Disk db.json missing" });
+        await copyFileSafe(DISK_DB, LOCAL_DB);
+        return res.json({ ok: true, action: "pulled_disk_to_local" });
+      }
+
+      const result = await bootSync();
+      return res.json(result);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+})();
+
