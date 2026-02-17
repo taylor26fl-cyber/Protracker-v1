@@ -1,0 +1,16 @@
+{
+  "name": "protracker-v1",
+  "version": "1.0.0",
+  "description": "ProTracker v1 (single-server UI + API, JSON file DB)",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

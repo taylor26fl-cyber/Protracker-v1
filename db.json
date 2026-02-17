@@ -1,0 +1,25 @@
+{
+  "nbaPlayerGameLogs": [
+    { "playerId": "1", "playerName": "Player One", "gameDate": "2026-02-15", "pts": 28, "reb": 7, "ast": 6, "fg3m": 3 },
+    { "playerId": "1", "playerName": "Player One", "gameDate": "2026-02-14", "pts": 31, "reb": 6, "ast": 5, "fg3m": 4 },
+    { "playerId": "1", "playerName": "Player One", "gameDate": "2026-02-13", "pts": 24, "reb": 8, "ast": 7, "fg3m": 2 },
+    { "playerId": "1", "playerName": "Player One", "gameDate": "2026-02-12", "pts": 35, "reb": 5, "ast": 4, "fg3m": 5 },
+    { "playerId": "1", "playerName": "Player One", "gameDate": "2026-02-11", "pts": 22, "reb": 9, "ast": 8, "fg3m": 1 },
+
+    { "playerId": "2", "playerName": "Player Two", "gameDate": "2026-02-15", "pts": 18, "reb": 12, "ast": 3, "fg3m": 0 },
+    { "playerId": "2", "playerName": "Player Two", "gameDate": "2026-02-14", "pts": 20, "reb": 10, "ast": 4, "fg3m": 1 },
+    { "playerId": "2", "playerName": "Player Two", "gameDate": "2026-02-13", "pts": 16, "reb": 11, "ast": 5, "fg3m": 0 },
+    { "playerId": "2", "playerName": "Player Two", "gameDate": "2026-02-12", "pts": 22, "reb": 13, "ast": 2, "fg3m": 1 },
+    { "playerId": "2", "playerName": "Player Two", "gameDate": "2026-02-11", "pts": 14, "reb": 9, "ast": 3, "fg3m": 0 }
+  ],
+  "sgoPropLines": [
+    { "date": "2026-02-16", "playerId": "1", "playerName": "Player One", "statType": "points", "line": 27.5, "team": "AAA" },
+    { "date": "2026-02-16", "playerId": "2", "playerName": "Player Two", "statType": "rebounds", "line": 10.5, "team": "BBB" }
+  ],
+  "hardrockPropLines": [
+    { "date": "2026-02-16", "playerId": "1", "playerName": "Player One", "statType": "3pm", "line": 2.5, "team": "AAA" },
+    { "date": "2026-02-16", "playerId": "2", "playerName": "Player Two", "statType": "assists", "line": 3.5, "team": "BBB" }
+  ],
+  "propsArchive": {},
+  "meta": { "version": 1 }
+}

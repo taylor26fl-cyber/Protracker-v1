@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ProTracker v1</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background: #0b0c10; color: #e8e8e8; }
+    header { padding: 14px; border-bottom: 1px solid #222; position: sticky; top: 0; background: #0b0c10; }
+    h1 { font-size: 18px; margin: 0 0 6px; }
+    .sub { font-size: 12px; opacity: 0.8; }
+    main { padding: 12px 14px 80px; max-width: 980px; margin: 0 auto; }
+    .card { background: #111319; border: 1px solid #222; border-radius: 12px; padding: 12px; margin: 12px 0; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+    label { font-size: 12px; opacity: 0.85; display: block; margin-bottom: 4px; }
+    input { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid #2b2f3a; background: #0d0f14; color: #e8e8e8; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #2b2f3a; background: #1a1f2a; color: #e8e8e8; font-weight: 600; }
+    .grow { flex: 1 1 180px; min-width: 160px; }
+    .btns { display: flex; gap: 10px; flex-wrap: wrap; }
+    .muted { opacity: 0.8; font-size: 12px; }
+    .error { background: #2a1010; border: 1px solid #6a1f1f; color: #ffd1d1; padding: 10px; border-radius: 10px; margin-top: 10px; white-space: pre-wrap; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #0d0f14; border: 1px solid #2b2f3a; padding: 10px; border-radius: 10px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #222; padding: 8px 6px; text-align: left; font-size: 13px; }
+    th { font-size: 12px; opacity: 0.9; }
+    .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #2b2f3a; font-size: 12px; }
+    .tierA { border-color:#5a2; }
+    .tierB { border-color:#aa2; }
+    .tierC { border-color:#a55; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ProTracker v1</h1>
+    <div class="sub">Same-origin UI + API • Relative fetch("/api/...") • JSON file DB</div>
+  </header>
+
+  <main>
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <label for="dateInput">Date (defaults to activeDate)</label>
+          <input id="dateInput" type="date" />
+        </div>
+        <div class="grow">
+          <label for="minEdgeInput">minEdge</label>
+          <input id="minEdgeInput" type="number" step="0.1" value="0" />
+        </div>
+        <div class="grow">
+          <label for="gamesInput">gamesN (rolling)</label>
+          <input id="gamesInput" type="number" step="1" value="10" min="1" max="30" />
+        </div>
+        <div class="btns">
+          <button id="refreshBtn">Refresh</button>
+          <button id="warmBtn">Warm Leaders</button>
+        </div>
+      </div>
+      <div id="errorBox" class="error" style="display:none;"></div>
+      <div class="muted" id="metaLine" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin:0 0 10px; font-size:16px;">Quick Links</h2>
+      <div id="quickLinks"></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin:0 0 10px; font-size:16px;">Status</h2>
+      <div id="status"></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin:0 0 10px; font-size:16px;">Leaders (Top 25)</h2>
+      <div id="leaders"></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin:0 0 10px; font-size:16px;">Edges (Tiered)</h2>
+      <div id="edges"></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin:0 0 10px; font-size:16px;">SGO Props For Date</h2>
+      <div id="sgoProps"></div>
+    </div>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
