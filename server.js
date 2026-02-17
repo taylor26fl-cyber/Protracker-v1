@@ -1499,3 +1499,55 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
   });
 })();
 
+// ===========================
+// BOTTOM-ONLY: Restore DB Upload (Render Free friendly)
+// Adds:
+//  - POST /api/db/restore  (expects JSON body = full db object)
+// Safety:
+//  - requires header x-pt-restore-key matching process.env.RESTORE_KEY (if set)
+// ===========================
+
+(function () {
+  // Optional protection: set RESTORE_KEY on Render env to prevent strangers restoring your DB
+  const REQUIRED_KEY = process.env.RESTORE_KEY || "";
+
+  app.post("/api/db/restore", express.json({ limit: "5mb" }), async (req, res) => {
+    try {
+      if (REQUIRED_KEY) {
+        const k = String(req.headers["x-pt-restore-key"] || "");
+        if (k !== REQUIRED_KEY) {
+          return res.status(401).json({ ok: false, error: "Unauthorized (missing/invalid restore key)" });
+        }
+      }
+
+      const incoming = req.body;
+      if (!incoming || typeof incoming !== "object") {
+        return res.status(400).json({ ok: false, error: "Body must be a JSON object (full db)" });
+      }
+
+      // Minimal validation + normalization
+      const db = incoming;
+      if (!Array.isArray(db.nbaPlayerGameLogs)) db.nbaPlayerGameLogs = [];
+      if (!Array.isArray(db.sgoPropLines)) db.sgoPropLines = [];
+      if (!Array.isArray(db.hardrockPropLines)) db.hardrockPropLines = [];
+      if (!db.propsArchive || typeof db.propsArchive !== "object") db.propsArchive = {};
+      if (!db.meta || typeof db.meta !== "object") db.meta = {};
+      db.meta.restoredAt = new Date().toISOString();
+
+      await writeDB(db);
+
+      res.json({
+        ok: true,
+        counts: {
+          nbaPlayerGameLogs: db.nbaPlayerGameLogs.length,
+          sgoPropLines: db.sgoPropLines.length,
+          hardrockPropLines: db.hardrockPropLines.length,
+          archiveDates: Object.keys(db.propsArchive).length
+        }
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+})();
+

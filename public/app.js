@@ -1861,3 +1861,120 @@ function wireUI() {
   });
 })();
 
+// ===========================
+// UI PACK ADDON: Restore DB (Upload) for Render Free
+// Adds a file picker + Restore button that POSTs to /api/db/restore
+// If you set RESTORE_KEY on Render, put it in the input box.
+// ===========================
+
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+
+  function showErr(msg) {
+    const box = $("errorBox");
+    if (!box) return;
+    box.textContent = msg ? String(msg) : "";
+    box.style.display = msg ? "block" : "none";
+  }
+
+  function mountRestoreUI() {
+    if ($("ptRestoreBox")) return;
+
+    const main = document.querySelector("main") || document.body;
+
+    const section = document.createElement("section");
+    section.style.padding = "12px";
+    section.style.border = "1px solid #ddd";
+    section.style.borderRadius = "10px";
+    section.style.margin = "12px 0";
+
+    const h = document.createElement("h3");
+    h.textContent = "Restore DB";
+    h.style.margin = "0 0 8px 0";
+
+    const file = document.createElement("input");
+    file.type = "file";
+    file.accept = "application/json";
+    file.id = "ptRestoreFile";
+    file.style.width = "100%";
+    file.style.margin = "8px 0";
+    file.style.fontSize = "16px";
+
+    const key = document.createElement("input");
+    key.type = "password";
+    key.placeholder = "Restore key (only if you set RESTORE_KEY on Render)";
+    key.id = "ptRestoreKey";
+    key.style.width = "100%";
+    key.style.padding = "10px";
+    key.style.fontSize = "16px";
+    key.style.margin = "8px 0";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "ptRestoreBtn";
+    btn.textContent = "Restore From File";
+    btn.style.width = "100%";
+    btn.style.padding = "12px";
+    btn.style.fontSize = "16px";
+
+    const pre = document.createElement("pre");
+    pre.id = "ptRestoreBox";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.marginTop = "10px";
+    pre.style.padding = "10px";
+    pre.style.background = "#f7f7f7";
+    pre.style.borderRadius = "10px";
+    pre.textContent = "Choose a backup JSON file (downloaded from Backup DB).";
+
+    section.appendChild(h);
+    section.appendChild(file);
+    section.appendChild(key);
+    section.appendChild(btn);
+    section.appendChild(pre);
+
+    main.appendChild(section);
+
+    btn.addEventListener("click", async () => {
+      showErr("");
+      const f = file.files && file.files[0] ? file.files[0] : null;
+      if (!f) return showErr("Pick a .json backup file first.");
+
+      pre.textContent = "Reading file…";
+      try {
+        const text = await f.text();
+        let obj = null;
+        try { obj = JSON.parse(text); } catch { throw new Error("Invalid JSON file"); }
+
+        pre.textContent = "Restoring…";
+        const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+        const k = key.value ? String(key.value) : "";
+        if (k) headers["x-pt-restore-key"] = k;
+
+        const r = await fetch("/api/db/restore", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(obj)
+        });
+        const dataText = await r.text();
+        let data = null;
+        try { data = dataText ? JSON.parse(dataText) : null; } catch {}
+        if (!r.ok || !data || !data.ok) throw new Error((data && data.error) ? data.error : dataText || `Restore failed (${r.status})`);
+
+        pre.textContent = "Restore OK:\n" + JSON.stringify(data, null, 2);
+
+        // If your page has Refresh button, auto refresh after restore
+        const refreshBtn = $("refreshBtn");
+        if (refreshBtn) setTimeout(() => refreshBtn.click(), 400);
+      } catch (e) {
+        pre.textContent = "";
+        showErr(e.message || String(e));
+      }
+    });
+  }
+
+  window.addEventListener("load", () => {
+    mountRestoreUI();
+  });
+})();
+
