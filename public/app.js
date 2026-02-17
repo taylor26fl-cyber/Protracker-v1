@@ -1978,3 +1978,156 @@ function wireUI() {
   });
 })();
 
+// ===========================
+// NEXT BLOCK: Render Edges as a Table (mobile-friendly)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function pickEdgesList(data) {
+    // Your endpoint returns something like:
+    // { tiered: { A:[], B:[], C:[] } } OR { tiered: { tierA:[], ... } }
+    const t = data && data.tiered ? data.tiered : null;
+    if (!t || typeof t !== "object") return { A: [], B: [], C: [] };
+
+    const A = t.A || t.tierA || t.TierA || [];
+    const B = t.B || t.tierB || t.TierB || [];
+    const C = t.C || t.tierC || t.TierC || [];
+
+    return {
+      A: Array.isArray(A) ? A : [],
+      B: Array.isArray(B) ? B : [],
+      C: Array.isArray(C) ? C : []
+    };
+  }
+
+  function normalizeRow(row, tier) {
+    // Support multiple shapes safely
+    const playerName = row.playerName || row.name || row.player || row.player_id || row.playerId || "Unknown";
+    const statType = row.statType || row.market || row.propType || row.stat || "stat";
+    const team = row.team || row.abbr || row.teamAbbr || "";
+    const book = row.source || row.book || row.sportsbook || "";
+    const line = (row.line ?? row.bookLine ?? row.propLine);
+    const proj = (row.proj ?? row.projection ?? row.model ?? row.avg ?? row.rollingAvg);
+    const edge = (row.edge ?? row.diff ?? row.delta);
+
+    const lineNum = (line !== undefined && line !== null && line !== "") ? Number(line) : null;
+    const projNum = (proj !== undefined && proj !== null && proj !== "") ? Number(proj) : null;
+    const edgeNum = (edge !== undefined && edge !== null && edge !== "") ? Number(edge) : (
+      (lineNum !== null && projNum !== null) ? (projNum - lineNum) : null
+    );
+
+    // Pick a "lean" direction if we can
+    let lean = "";
+    if (edgeNum !== null && Number.isFinite(edgeNum)) {
+      lean = edgeNum >= 0 ? "Over" : "Under";
+    }
+
+    return {
+      tier,
+      playerName,
+      team,
+      statType,
+      book,
+      line: (lineNum !== null && Number.isFinite(lineNum)) ? lineNum : (line ?? ""),
+      proj: (projNum !== null && Number.isFinite(projNum)) ? projNum : (proj ?? ""),
+      edge: (edgeNum !== null && Number.isFinite(edgeNum)) ? edgeNum : (edge ?? ""),
+      lean
+    };
+  }
+
+  function makeEdgesTable(rows) {
+    const wrap = document.createElement("div");
+    wrap.style.overflowX = "auto";
+
+    const t = document.createElement("table");
+    t.style.width = "100%";
+    t.style.borderCollapse = "collapse";
+    t.style.fontSize = "14px";
+
+    t.innerHTML = `
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Tier</th>
+          <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Player</th>
+          <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Stat</th>
+          <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Line</th>
+          <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Proj</th>
+          <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Edge</th>
+          <th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Lean</th>
+        </tr>
+      </thead>
+    `;
+
+    const tb = document.createElement("tbody");
+
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const edgeVal = typeof r.edge === "number" ? r.edge : Number(r.edge);
+      const edgeTxt = Number.isFinite(edgeVal) ? edgeVal.toFixed(2) : escapeHtml(r.edge);
+
+      tr.innerHTML = `
+        <td style="padding:8px;border-bottom:1px solid #eee;font-weight:700;">${escapeHtml(r.tier)}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;">
+          ${escapeHtml(r.playerName)} ${r.team ? `<span style="opacity:.7;">(${escapeHtml(r.team)})</span>` : ""}
+          ${r.book ? `<div style="opacity:.6;font-size:12px;">${escapeHtml(r.book)}</div>` : ""}
+        </td>
+        <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(r.statType)}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(r.line)}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(r.proj)}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;font-weight:700;">${edgeTxt}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(r.lean)}</td>
+      `;
+      tb.appendChild(tr);
+    });
+
+    t.appendChild(tb);
+    wrap.appendChild(t);
+    return wrap;
+  }
+
+  // Override the existing renderEdges function (bottom-only)
+  // Your original code calls renderEdges(edges).
+  window.renderEdges = function (data) {
+    const wrap = $("edges");
+    if (!wrap) return;
+
+    wrap.innerHTML = "";
+
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.textContent = `date: ${data.date} • gamesN: ${data.gamesN} • minEdge: ${data.minEdge} • total: ${data.counts?.total ?? "?"}`;
+    wrap.appendChild(meta);
+
+    const lists = pickEdgesList(data);
+
+    // Flatten A then B then C
+    const rows = []
+      .concat(lists.A.map((r) => normalizeRow(r, "A")))
+      .concat(lists.B.map((r) => normalizeRow(r, "B")))
+      .concat(lists.C.map((r) => normalizeRow(r, "C")));
+
+    if (!rows.length) {
+      const pre = document.createElement("pre");
+      pre.textContent = "No edges found for current filters.";
+      wrap.appendChild(pre);
+      return;
+    }
+
+    wrap.appendChild(makeEdgesTable(rows));
+  };
+})();
+
