@@ -1633,3 +1633,231 @@ function wireUI() {
   });
 })();
 
+// ===========================
+// UI PACK: Archive + Line Movers + Backup (Render-safe)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+
+  function showErr(msg) {
+    const box = $("errorBox");
+    if (!box) return;
+    box.textContent = msg ? String(msg) : "";
+    box.style.display = msg ? "block" : "none";
+  }
+
+  async function getJSON(url) {
+    const res = await fetch(url, { headers: { "Accept": "application/json" } });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) throw new Error((data && data.error) ? data.error : text || res.statusText);
+    return data;
+  }
+
+  async function postJSON(url, body) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(body || {})
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) throw new Error((data && data.error) ? data.error : text || res.statusText);
+    return data;
+  }
+
+  function dateVal() {
+    const d = $("dateInput");
+    return d && d.value ? String(d.value) : "";
+  }
+
+  function mountSection(title) {
+    const main = document.querySelector("main") || document.body;
+
+    const section = document.createElement("section");
+    section.style.padding = "12px";
+    section.style.border = "1px solid #ddd";
+    section.style.borderRadius = "10px";
+    section.style.margin = "12px 0";
+
+    const h = document.createElement("h3");
+    h.textContent = title;
+    h.style.margin = "0 0 8px 0";
+
+    section.appendChild(h);
+    main.appendChild(section);
+    return section;
+  }
+
+  function mountArchive() {
+    if ($("ptArchiveOut")) return;
+    const sec = mountSection("Archive");
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.gap = "8px";
+
+    const btnA = document.createElement("button");
+    btnA.type = "button";
+    btnA.textContent = "Archive Props For Date";
+    btnA.style.flex = "1";
+    btnA.style.padding = "12px";
+    btnA.style.fontSize = "16px";
+
+    const btnL = document.createElement("button");
+    btnL.type = "button";
+    btnL.textContent = "Load Archive For Date";
+    btnL.style.flex = "1";
+    btnL.style.padding = "12px";
+    btnL.style.fontSize = "16px";
+
+    row.appendChild(btnA);
+    row.appendChild(btnL);
+
+    const pre = document.createElement("pre");
+    pre.id = "ptArchiveOut";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.marginTop = "10px";
+    pre.style.padding = "10px";
+    pre.style.background = "#f7f7f7";
+    pre.style.borderRadius = "10px";
+    pre.textContent = "No archive loaded yet.";
+
+    sec.appendChild(row);
+    sec.appendChild(pre);
+
+    btnA.addEventListener("click", async () => {
+      showErr("");
+      const date = dateVal();
+      if (!date) return showErr("Pick a date first.");
+      pre.textContent = "Archiving…";
+      try {
+        const data = await postJSON("/api/props/archive-date", { date });
+        pre.textContent = `Archived ${data.date}\nArchivedAt: ${data.archivedAt}\nCounts: sgo=${data.counts.sgo} hardrock=${data.counts.hardrock}`;
+      } catch (e) {
+        pre.textContent = "";
+        showErr(e.message || String(e));
+      }
+    });
+
+    btnL.addEventListener("click", async () => {
+      showErr("");
+      const date = dateVal();
+      if (!date) return showErr("Pick a date first.");
+      pre.textContent = "Loading…";
+      try {
+        const data = await getJSON(`/api/props/archive?date=${encodeURIComponent(date)}`);
+        if (!data.exists) { pre.textContent = `No archive exists for ${date}.`; return; }
+        const a = data.archive || {};
+        const sgo = Array.isArray(a.sgo) ? a.sgo : [];
+        const hr  = Array.isArray(a.hardrock) ? a.hardrock : [];
+        pre.textContent =
+          `Archived Date: ${date}\nArchivedAt: ${a.ts || "?"}\nSGO: ${sgo.length} | Hardrock: ${hr.length}\n\n` +
+          `First 10 SGO:\n${sgo.slice(0,10).map(p=>`${p.playerName||p.playerId||"?"} ${p.statType} ${p.line}`).join("\n")}\n\n` +
+          `First 10 Hardrock:\n${hr.slice(0,10).map(p=>`${p.playerName||p.playerId||"?"} ${p.statType} ${p.line}`).join("\n")}`;
+      } catch (e) {
+        pre.textContent = "";
+        showErr(e.message || String(e));
+      }
+    });
+  }
+
+  function mountLineMovers() {
+    if ($("ptLineMovesOut")) return;
+    const sec = mountSection("Line Movers");
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.gap = "8px";
+    row.style.marginBottom = "8px";
+
+    const src = document.createElement("select");
+    src.style.flex = "1";
+    src.style.padding = "10px";
+    src.style.fontSize = "16px";
+    src.innerHTML = `<option value="all">All</option><option value="sgo">SGO</option><option value="hardrock">Hardrock</option>`;
+
+    const lim = document.createElement("input");
+    lim.type = "number";
+    lim.inputMode = "numeric";
+    lim.value = "50";
+    lim.style.width = "110px";
+    lim.style.padding = "10px";
+    lim.style.fontSize = "16px";
+
+    row.appendChild(src);
+    row.appendChild(lim);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Load Line Movers";
+    btn.style.width = "100%";
+    btn.style.padding = "12px";
+    btn.style.fontSize = "16px";
+
+    const pre = document.createElement("pre");
+    pre.id = "ptLineMovesOut";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.marginTop = "10px";
+    pre.style.padding = "10px";
+    pre.style.background = "#f7f7f7";
+    pre.style.borderRadius = "10px";
+    pre.textContent = "No line movers loaded yet.";
+
+    sec.appendChild(row);
+    sec.appendChild(btn);
+    sec.appendChild(pre);
+
+    btn.addEventListener("click", async () => {
+      showErr("");
+      const date = dateVal();
+      if (!date) return showErr("Pick a date first.");
+      pre.textContent = "Loading…";
+      try {
+        const data = await getJSON(`/api/props/line-moves?date=${encodeURIComponent(date)}&source=${encodeURIComponent(src.value)}&limit=${encodeURIComponent(lim.value || 50)}`);
+        if (!data.exists) { pre.textContent = `No archive exists for ${date}. Archive first.`; return; }
+        const moves = Array.isArray(data.moves) ? data.moves : [];
+        const lines = [];
+        lines.push(`Date: ${data.date} | Source: ${data.source} | Moves: ${data.counts.moves}`);
+        lines.push("");
+        if (!moves.length) lines.push("(No moves yet)");
+        else for (const m of moves) {
+          const d = (m.delta >= 0) ? `+${m.delta}` : `${m.delta}`;
+          lines.push(`${m.playerName || m.playerId || "?"} ${m.statType} | ${m.openLine} → ${m.curLine} (${d}) | ${m.source}`);
+        }
+        pre.textContent = lines.join("\n");
+      } catch (e) {
+        pre.textContent = "";
+        showErr(e.message || String(e));
+      }
+    });
+  }
+
+  function mountBackup() {
+    if ($("ptBackupBtn")) return;
+    const sec = mountSection("Backup");
+
+    const btn = document.createElement("button");
+    btn.id = "ptBackupBtn";
+    btn.type = "button";
+    btn.textContent = "Backup DB (Download)";
+    btn.style.width = "100%";
+    btn.style.padding = "12px";
+    btn.style.fontSize = "16px";
+
+    sec.appendChild(btn);
+    btn.addEventListener("click", () => { showErr(""); window.location.href = "/api/db/export"; });
+  }
+
+  window.addEventListener("load", () => {
+    mountArchive();
+    mountLineMovers();
+    mountBackup();
+  });
+})();
+
