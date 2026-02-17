@@ -1317,21 +1317,6 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
 // Append-only. Paste at very bottom of server.js
 // ===========================
 
-app.get("/api/db/export", async (req, res) => {
-  try {
-    const db = await readDB();
-    const fileName =
-      "protracker-db-" +
-      new Date().toISOString().replace(/[:.]/g, "-") +
-      ".json";
-
-    res.setHeader("Content-Type", "application/json");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    res.send(JSON.stringify(db, null, 2));
-  } catch (err) {
-    res.status(500).json({ ok: false, error: String(err?.message || err) });
-  }
-});
 
 app.post("/api/props/archive-date", async (req, res) => {
   try {
@@ -1340,9 +1325,7 @@ app.post("/api/props/archive-date", async (req, res) => {
 
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ ok: false, error: "Missing/invalid date. Use {\"date\":\"YYYY-MM-DD\"}" });
-    }
-
-    const db = await readDB();
+    }    const db = await readDB();
 
     const sgo = (Array.isArray(db.sgoPropLines) ? db.sgoPropLines : []).filter((p) => String(p.date || "") === date);
     const hardrock = (Array.isArray(db.hardrockPropLines) ? db.hardrockPropLines : []).filter((p) => String(p.date || "") === date);
