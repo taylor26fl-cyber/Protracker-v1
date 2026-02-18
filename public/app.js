@@ -2867,3 +2867,141 @@ function wireUI() {
   };
 })();
 
+// ===========================
+// NEXT BLOCK: Pretty Status UI (badges + counts + key chips)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_PRETTY_STATUS__) return;
+  globalThis.__PT_PRETTY_STATUS__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  function chip(text, bg, bd, fg) {
+    const c = document.createElement("span");
+    c.textContent = text;
+    c.style.display = "inline-flex";
+    c.style.alignItems = "center";
+    c.style.padding = "6px 10px";
+    c.style.borderRadius = "999px";
+    c.style.fontSize = "12px";
+    c.style.fontWeight = "750";
+    c.style.background = bg;
+    c.style.border = `1px solid ${bd}`;
+    c.style.color = fg;
+    return c;
+  }
+
+  function cardRow(label, value, kind) {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.justifyContent = "space-between";
+    row.style.alignItems = "center";
+    row.style.gap = "10px";
+    row.style.padding = "10px 12px";
+    row.style.borderRadius = "14px";
+    row.style.border = "1px solid rgba(226,232,240,.95)";
+    row.style.background = "rgba(255,255,255,.85)";
+    row.style.boxShadow = "0 10px 18px rgba(15,23,42,.04)";
+
+    const left = document.createElement("div");
+    left.textContent = label;
+    left.style.fontWeight = "800";
+
+    const v = Number(value ?? 0);
+    let c;
+    if (kind === "good") c = chip(String(v), "rgba(16,185,129,.12)", "rgba(16,185,129,.25)", "#0b5a3e");
+    else if (kind === "warn") c = chip(String(v), "rgba(245,158,11,.14)", "rgba(245,158,11,.25)", "#7a4b00");
+    else c = chip(String(v), "rgba(79,70,229,.12)", "rgba(79,70,229,.25)", "#1f2a85");
+
+    row.appendChild(left);
+    row.appendChild(c);
+    return row;
+  }
+
+  function keysWrap(title, keys) {
+    const box = document.createElement("div");
+    box.style.marginTop = "10px";
+
+    const h = document.createElement("div");
+    h.className = "muted";
+    h.style.fontWeight = "800";
+    h.style.marginBottom = "6px";
+    h.textContent = title;
+
+    const line = document.createElement("div");
+    line.style.display = "flex";
+    line.style.flexWrap = "wrap";
+    line.style.gap = "8px";
+
+    (Array.isArray(keys) ? keys : []).forEach((k) => {
+      line.appendChild(chip(String(k), "rgba(6,182,212,.10)", "rgba(6,182,212,.22)", "#0b5460"));
+    });
+
+    if (!keys || !keys.length) {
+      line.appendChild(chip("none", "rgba(148,163,184,.14)", "rgba(148,163,184,.25)", "#334155"));
+    }
+
+    box.appendChild(h);
+    box.appendChild(line);
+    return box;
+  }
+
+  // Override renderStatus
+  window.renderStatus = function prettyStatus(data) {
+    const wrap = $("status");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const okLine = document.createElement("div");
+    okLine.style.display = "flex";
+    okLine.style.justifyContent = "space-between";
+    okLine.style.alignItems = "center";
+    okLine.style.gap = "10px";
+
+    const title = document.createElement("div");
+    title.style.fontWeight = "900";
+    title.style.fontSize = "15px";
+    title.textContent = "DB Status";
+
+    const ok = data.ok ? chip("OK", "rgba(16,185,129,.12)", "rgba(16,185,129,.25)", "#0b5a3e")
+                       : chip("NOT OK", "rgba(239,68,68,.10)", "rgba(239,68,68,.25)", "#7f1d1d");
+
+    okLine.appendChild(title);
+    okLine.appendChild(ok);
+    wrap.appendChild(okLine);
+
+    const grid = document.createElement("div");
+    grid.style.display = "grid";
+    grid.style.gridTemplateColumns = "repeat(auto-fit, minmax(220px, 1fr))";
+    grid.style.gap = "10px";
+    grid.style.marginTop = "10px";
+
+    const counts = data.counts || {};
+    const a = Number(counts.nbaPlayerGameLogs || 0);
+    const b = Number(counts.sgoPropLines || 0);
+    const c = Number(counts.hardrockPropLines || 0);
+
+    grid.appendChild(cardRow("nbaPlayerGameLogs", a, a > 0 ? "good" : "warn"));
+    grid.appendChild(cardRow("sgoPropLines", b, b > 0 ? "good" : "warn"));
+    grid.appendChild(cardRow("hardrockPropLines", c, c > 0 ? "good" : "warn"));
+    wrap.appendChild(grid);
+
+    const sample = data.sampleKeys || {};
+    wrap.appendChild(keysWrap("Sample keys: nbaPlayerGameLogs", sample.nbaPlayerGameLogs || []));
+    wrap.appendChild(keysWrap("Sample keys: sgoPropLines", sample.sgoPropLines || []));
+    wrap.appendChild(keysWrap("Sample keys: hardrockPropLines", sample.hardrockPropLines || []));
+
+    const cache = data.cache && data.cache.leaders ? data.cache.leaders : null;
+    if (cache) {
+      const line = document.createElement("div");
+      line.className = "muted";
+      line.style.marginTop = "10px";
+      line.textContent = `leaders cache • hasData: ${cache.hasData} • ts: ${cache.ts || "null"}`;
+      wrap.appendChild(line);
+    }
+  };
+})();
+
