@@ -2045,3 +2045,100 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
   console.log("[sgo-debug] registered GET /api/dev/sgo/debug");
 })();
 
+// ===========================
+// DEBUG BLOCK: SGO upstream debug (no secrets)
+// GET /api/dev/sgo/debug?date=YYYY-MM-DD&limit=20
+// Append-only.
+// ===========================
+(function () {
+  if (globalThis.__PT_SGO_DEBUG__) return;
+  globalThis.__PT_SGO_DEBUG__ = true;
+
+  const appRef = (typeof app !== "undefined" && app) ? app : (globalThis.app || null);
+  if (!appRef) {
+    console.error("[sgo-debug] Express app not found");
+    return;
+  }
+
+  const doFetch = (typeof fetch === "function") ? fetch : null;
+  if (!doFetch) {
+    console.error("[sgo-debug] fetch() not available");
+    return;
+  }
+
+  function isYMD(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+
+  function summarizeShape(data) {
+    if (!data || typeof data !== "object") return { type: typeof data };
+    const topKeys = Object.keys(data).slice(0, 30);
+    const candidates = ["data", "results", "events", "props", "lines", "items"];
+    const arrays = candidates
+      .map((k) => [k, Array.isArray(data[k]) ? data[k].length : null])
+      .filter((x) => x[1] !== null);
+    return { type: "object", topKeys, arrays };
+  }
+
+  function pick(obj, keys) {
+    for (const k of keys) {
+      if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+    }
+    return undefined;
+  }
+
+  appRef.get("/api/dev/sgo/debug", async (req, res) => {
+    try {
+      const date = String(req.query.date || "").trim();
+      const limit = Math.max(1, Math.min(200, Number(req.query.limit || 20)));
+      if (!isYMD(date)) return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD." });
+
+      const apiKey = process.env.SGO_API_KEY;
+      if (!apiKey) return res.status(400).json({ ok: false, error: "Missing SGO_API_KEY env var." });
+
+      // NOTE: If your import code uses a different SGO URL, we will update this after we see output.
+      const url = `https://api.sportsgameodds.com/v1/nba/props?date=${encodeURIComponent(date)}&limit=${limit}`;
+
+      const r = await doFetch(url, {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "x-api-key": apiKey
+        }
+      });
+
+      const text = await r.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch {}
+
+      const items =
+        (json && Array.isArray(json.props) && json.props) ||
+        (json && Array.isArray(json.data) && json.data) ||
+        (json && Array.isArray(json.results) && json.results) ||
+        (json && Array.isArray(json.events) && json.events) ||
+        [];
+
+      const sample = items.slice(0, 3).map((it) => {
+        if (!it || typeof it !== "object") return it;
+        return {
+          playerName: pick(it, ["playerName", "player", "name"]),
+          playerId: pick(it, ["playerId", "player_id", "id"]),
+          team: pick(it, ["team", "teamAbbr", "team_abbr"]),
+          statType: pick(it, ["statType", "market", "propType", "type"]),
+          line: pick(it, ["line", "value", "propLine", "points"]),
+          bookmaker: pick(it, ["bookmakerID", "bookmaker", "book"]),
+          rawKeys: Object.keys(it).slice(0, 25)
+        };
+      });
+
+      return res.json({
+        ok: true,
+        upstream: { url, status: r.status, statusText: r.statusText },
+        body: { parsed: !!json, shape: summarizeShape(json), itemsFound: items.length, sample, textPreview: text.slice(0, 250) }
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  console.log("[sgo-debug] route registered: GET /api/dev/sgo/debug");
+})();
+
