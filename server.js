@@ -535,78 +535,6 @@ app.get("/api/nba/edges-today-tiered", async (req, res) => {
 // Root
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-// Start (single listen)
-// ===========================
-// APPEND-ONLY ZONE: HELPERS
-// Add new helper functions BELOW this line.
-// Do not edit above unless necessary.
-// ===========================
-
-
-// ===========================
-// APPEND-ONLY ZONE: ROUTES
-// Add new API endpoints BELOW this line.
-// Keep each endpoint self-contained.
-// ===========================
-app.listen(PORT, HOST, () => console.log(`ProTracker v1 listening on http://${HOST}:${PORT}`));
-app.post("/api/import/nba-game-logs", async (req, res) => {
-  try {
-    const rows = Array.isArray(req.body) ? req.body : [];
-    if (rows.length === 0) {
-      return res.status(400).json({ ok: false, error: "Body must be an array of game logs" });
-    }
-
-    const db = await readDB();
-
-    // Dedup key: playerId + gameDate
-    const seen = new Set(
-      db.nbaPlayerGameLogs.map((g) => `${String(g.playerId || "")}__${String(g.gameDate || "")}`)
-    );
-
-    let added = 0;
-    const kept = [];
-
-    for (const r of rows) {
-      if (!r || typeof r !== "object") continue;
-
-      const playerId = r.playerId ?? r.player_id ?? r.pid ?? null;
-      const playerName = r.playerName ?? r.player_name ?? r.name ?? "";
-      const gameDate = r.gameDate ?? r.date ?? r.gamedate ?? null;
-
-      if (!playerId || !gameDate) continue;
-
-      const key = `${String(playerId)}__${String(gameDate)}`;
-      if (seen.has(key)) continue;
-
-      const row = {
-        playerId: String(playerId),
-        playerName: String(playerName || "").trim(),
-        gameDate: String(gameDate),
-        pts: Number.isFinite(Number(r.pts)) ? Number(r.pts) : undefined,
-        reb: Number.isFinite(Number(r.reb)) ? Number(r.reb) : undefined,
-        ast: Number.isFinite(Number(r.ast)) ? Number(r.ast) : undefined,
-        fg3m: Number.isFinite(Number(r.fg3m)) ? Number(r.fg3m) : undefined
-      };
-
-      db.nbaPlayerGameLogs.push(row);
-      seen.add(key);
-      kept.push(row);
-      added++;
-    }
-
-    await writeDB(db);
-
-    res.json({
-      ok: true,
-      received: rows.length,
-      added,
-      total: db.nbaPlayerGameLogs.length,
-      sampleAdded: kept.slice(0, 3)
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: String(err?.message || err) });
-  }
-});
 
 app.post("/api/import/sgo-props", async (req, res) => {
   try {
@@ -1549,5 +1477,453 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
       res.status(500).json({ ok: false, error: String(e?.message || e) });
     }
   });
+})();
+
+// ===========================
+// NEXT BLOCK: SportsGameOdds (SGO) API -> import NBA props into db.sgoPropLines
+// Append-only. Paste at bottom of server.js
+// Requires Node 18+ (Render OK) and global fetch (Node 20+/24 ok).
+// ===========================
+
+(function () {
+  "use strict";
+
+  if (globalThis.__PT_SGO_IMPORT_BLOCK__) return;
+  globalThis.__PT_SGO_IMPORT_BLOCK__ = true;
+
+  // --- Config ---
+  const SGO_BASE = "https://api.sportsgameodds.com/v2/events/";
+  const SGO_KEY_ENV = process.env.SGO_API_KEY || process.env.SPORTSGAMEODDS_API_KEY || "";
+
+  // Small in-memory cache to avoid burning credits during rapid refreshes
+  const sgoCache = new Map(); // key -> { ts, data }
+  const SGO_CACHE_MS = 30 * 1000; // 30s
+
+  function isYYYYMMDD(s) {
+    return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  }
+
+  function toISODateRangeUTC(dateYYYYMMDD) {
+    // Treat date as day boundary in UTC (simple + reliable)
+    const start = `${dateYYYYMMDD}T00:00:00.000Z`;
+    const d = new Date(`${dateYYYYMMDD}T00:00:00.000Z`);
+    const next = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+    const end = next.toISOString();
+    return { startsAfter: start, startsBefore: end };
+  }
+
+  function pickBestLine(oddObj) {
+    // We want an over/under "line" number for props.
+    // SGO examples show: bookOverUnder / fairOverUnder / byBookmaker[book].overUnder 2
+    const candidates = [
+      oddObj.bookOverUnder,
+      oddObj.openBookOverUnder,
+      oddObj.fairOverUnder,
+      oddObj.openFairOverUnder,
+    ].filter((v) => v !== undefined && v !== null && v !== "");
+
+    for (const v of candidates) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+
+    if (oddObj.byBookmaker && typeof oddObj.byBookmaker === "object") {
+      for (const bk of Object.keys(oddObj.byBookmaker)) {
+        const rec = oddObj.byBookmaker[bk];
+        if (!rec) continue;
+        const n = Number(rec.overUnder);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+
+    return null;
+  }
+
+  function parseOddId(oddID) {
+    // oddID format: {statID}-{statEntityID}-{periodID}-{betTypeID}-{sideID} 3
+    // Example: points-JALEN_DUREN_1_NBA-game-ou-over
+    if (!oddID || typeof oddID !== "string") return null;
+    const parts = oddID.split("-");
+    if (parts.length < 5) return null;
+    const statID = parts[0];
+    const sideID = parts[parts.length - 1];
+    const betTypeID = parts[parts.length - 2];
+    const periodID = parts[parts.length - 3];
+    const statEntityID = parts.slice(1, parts.length - 3).join("-");
+    return { statID, statEntityID, periodID, betTypeID, sideID };
+  }
+
+  function normalizeStatType(statID) {
+    const map = {
+      points: "points",
+      rebounds: "rebounds",
+      assists: "assists",
+      threes_made: "3pm",
+      threesmade: "3pm",
+      "3pm": "3pm",
+    };
+    return map[String(statID || "").toLowerCase()] || String(statID || "unknown");
+  }
+
+  async function sgoFetchEvents({ date, limit, bookmakerID, oddID, leagueID }) {
+    if (!SGO_KEY_ENV) {
+      throw new Error("Missing SGO API key. Set SGO_API_KEY on Render (and locally if needed).");
+    }
+    if (!isYYYYMMDD(date)) throw new Error("Invalid date. Use YYYY-MM-DD.");
+
+    const { startsAfter, startsBefore } = toISODateRangeUTC(date);
+    const params = new URLSearchParams();
+    params.set("leagueID", leagueID || "NBA");
+    params.set("oddsAvailable", "true");
+    params.set("startsAfter", startsAfter);
+    params.set("startsBefore", startsBefore);
+    params.set("includeOpposingOdds", "true");
+    params.set("limit", String(limit || 10));
+
+    if (bookmakerID) params.set("bookmakerID", bookmakerID);
+
+    // SGO docs show param is oddID (comma-separated list) 4
+    if (oddID) params.set("oddID", oddID);
+
+    const cacheKey = params.toString();
+    const hit = sgoCache.get(cacheKey);
+    if (hit && Date.now() - hit.ts < SGO_CACHE_MS) return hit.data;
+
+    const url = `${SGO_BASE}?${params.toString()}`;
+
+    const res = await fetch(url, {
+      headers: {
+        "Accept": "application/json",
+        "x-api-key": SGO_KEY_ENV, // official auth header 5
+      },
+    });
+
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!res.ok) {
+      const msg = (data && (data.error || data.message)) ? (data.error || data.message) : text;
+      throw new Error(`SGO ${res.status} ${res.statusText}: ${msg}`);
+    }
+
+    sgoCache.set(cacheKey, { ts: Date.now(), data });
+    return data;
+  }
+
+  function flattenPropsFromEvents(date, eventsResp) {
+    // eventsResp: { success, data:[{...event...}] } 6
+    const out = [];
+    const events = eventsResp && Array.isArray(eventsResp.data) ? eventsResp.data : [];
+
+    for (const ev of events) {
+      // Odds typically live under ev.odds (object keyed by oddID)
+      const oddsObj = ev && ev.odds && typeof ev.odds === "object" ? ev.odds : null;
+      if (!oddsObj) continue;
+
+      for (const oddKey of Object.keys(oddsObj)) {
+        const odd = oddsObj[oddKey];
+        if (!odd || typeof odd !== "object") continue;
+
+        const oddID = odd.oddID || oddKey;
+        const parsed = parseOddId(oddID);
+        if (!parsed) continue;
+
+        // Only keep player props (has playerID or statEntityID looks like a player)
+        const playerId = odd.playerID || parsed.statEntityID || "";
+        if (!playerId) continue;
+
+        const line = pickBestLine(odd);
+        if (line === null) continue; // no line = skip
+
+        const statType = normalizeStatType(odd.statID || parsed.statID);
+
+        out.push({
+          date,
+          source: "sgo",
+          eventID: ev.eventID || "",
+          leagueID: ev.leagueID || "",
+          playerId,
+          playerName: odd.playerName || odd.marketName || playerId, // fallback
+          statType,
+          side: parsed.sideID || "",            // over/under
+          period: parsed.periodID || "game",    // game/half/etc
+          betType: parsed.betTypeID || "ou",
+          line,
+          // optional useful fields:
+          marketName: odd.marketName || "",
+          lastUpdatedAt: (odd.byBookmaker && typeof odd.byBookmaker === "object")
+            ? (Object.values(odd.byBookmaker)[0]?.lastUpdatedAt || null)
+            : null,
+        });
+      }
+    }
+
+    return out;
+  }
+
+  // NEW ENDPOINT:
+  // POST /api/import/sgo-props?date=YYYY-MM-DD&limit=10
+  // Body optional: { bookmakerID, oddID, leagueID }
+  // Saves into db.sgoPropLines (replaces that date’s entries)
+  app.post("/api/import/sgo-props", async (req, res) => {
+    try {
+      const date = String(req.query.date || "").trim();
+      const limit = Number(req.query.limit || 10);
+
+      const bookmakerID = req.body && req.body.bookmakerID ? String(req.body.bookmakerID) : "";
+      const leagueID = req.body && req.body.leagueID ? String(req.body.leagueID) : "NBA";
+
+      // Default to the most common NBA player prop markets (over side only; includeOpposingOdds=true pulls both)
+      const defaultOddID =
+        [
+          "points-PLAYER_ID-game-ou-over",
+          "rebounds-PLAYER_ID-game-ou-over",
+          "assists-PLAYER_ID-game-ou-over",
+          "threes_made-PLAYER_ID-game-ou-over",
+        ].join(",");
+
+      const oddID = req.body && req.body.oddID ? String(req.body.oddID) : defaultOddID;
+
+      const eventsResp = await sgoFetchEvents({ date, limit, bookmakerID, oddID, leagueID });
+      const props = flattenPropsFromEvents(date, eventsResp);
+
+      const db = await readDB();
+      db.sgoPropLines = Array.isArray(db.sgoPropLines) ? db.sgoPropLines : [];
+
+      // Replace same-date entries
+      const before = db.sgoPropLines.length;
+      db.sgoPropLines = db.sgoPropLines.filter((p) => p.date !== date);
+
+      db.sgoPropLines.push(...props);
+
+      await writeDB(db);
+
+      res.json({
+        ok: true,
+        date,
+        imported: props.length,
+        replaced: before - db.sgoPropLines.length + props.length,
+        note: "Saved into db.sgoPropLines (same date replaced)."
+      });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+})();
+
+// ===========================
+// PATCH: Prevent duplicate routes (safe append-only fix)
+// This disables earlier duplicate registrations without editing old code.
+// ===========================
+
+(function () {
+  if (globalThis.__PT_ROUTE_DEDUP_PATCH__) return;
+  globalThis.__PT_ROUTE_DEDUP_PATCH__ = true;
+
+  function dedupeRoutes() {
+    if (!app || !app._router || !app._router.stack) return;
+
+    const seen = new Set();
+    const stack = app._router.stack;
+
+    for (let i = stack.length - 1; i >= 0; i--) {
+      const layer = stack[i];
+      if (!layer || !layer.route) continue;
+
+      const path = layer.route.path;
+      const methods = Object.keys(layer.route.methods || {}).join(",");
+
+      const key = `${methods}:${path}`;
+
+      if (seen.has(key)) {
+        // remove older duplicate
+        stack.splice(i, 1);
+      } else {
+        seen.add(key);
+      }
+    }
+  }
+
+  // Run after all routes registered
+  setTimeout(dedupeRoutes, 0);
+})();
+
+// ===========================
+// PATCH: Force server to listen (fix silent EXIT:0)
+// Append-only. Paste at bottom of server.js
+// ===========================
+
+(function () {
+  if (globalThis.__PT_FORCE_LISTEN__) return;
+  globalThis.__PT_FORCE_LISTEN__ = true;
+
+  // Print any hidden crashes
+  process.on("uncaughtException", (e) => console.error("[uncaughtException]", e));
+  process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e));
+
+  // Get the Express app safely (works even if app is not in local scope)
+  const appRef = (typeof app !== "undefined" && app) ? app : (globalThis.app || null);
+
+  if (!appRef || typeof appRef.listen !== "function") {
+    console.error("[BOOT] Express app not found. appRef is missing.");
+    return;
+  }
+
+  // Avoid double-listen
+  if (globalThis.__PT_HTTP_SERVER__) return;
+
+  const port = Number(process.env.PORT || 3000);
+  const host = "0.0.0.0";
+
+  const server = appRef.listen(port, host, () => {
+    console.log(`ProTracker v1 listening on http://${host}:${port}`);
+  });
+
+  server.on("error", (err) => {
+    console.error("[BOOT] Listen error:", err);
+  });
+
+  globalThis.__PT_HTTP_SERVER__ = server;
+})();
+
+// ===========================
+// PATCH: Expose Express app globally (so bottom-only patches can access it)
+// Then start listening if not already started.
+// ===========================
+
+(function () {
+  if (globalThis.__PT_EXPOSE_APP__) return;
+  globalThis.__PT_EXPOSE_APP__ = true;
+
+  // Try to locate an Express instance in common variables
+  // If your file uses a different variable name, we’ll adjust.
+  try {
+    if (typeof app !== "undefined" && app && typeof app.listen === "function") {
+      globalThis.app = app;
+    }
+  } catch {}
+
+  // If we still don't have it, try to infer from module exports (rare)
+  try {
+    if (!globalThis.app && module && module.exports && typeof module.exports.listen === "function") {
+      globalThis.app = module.exports;
+    }
+  } catch {}
+
+  if (!globalThis.app || typeof globalThis.app.listen !== "function") {
+    console.error("[BOOT] Could not expose Express app. Tell me what variable holds express(): e.g. const APP = express()");
+    return;
+  }
+
+  // Start listening once
+  if (globalThis.__PT_HTTP_SERVER__) return;
+
+  const port = Number(process.env.PORT || 3000);
+  const host = "0.0.0.0";
+
+  const server = globalThis.app.listen(port, host, () => {
+    console.log(`ProTracker v1 listening on http://${host}:${port}`);
+  });
+
+  server.on("error", (err) => console.error("[BOOT] Listen error:", err));
+  globalThis.__PT_HTTP_SERVER__ = server;
+})();
+
+// ===========================
+// NEXT BLOCK: Backfill missing team fields on nbaPlayerGameLogs
+// Adds POST /api/dev/backfill-teams
+// Append-only. Paste at bottom of server.js
+// ===========================
+
+(function () {
+  try {
+    if (globalThis.__PT_BACKFILL_TEAMS__) return;
+    globalThis.__PT_BACKFILL_TEAMS__ = true;
+
+    // Access express app + db helpers from existing file
+    const appRef = (typeof app !== "undefined" && app) ? app : (globalThis.app || null);
+    if (!appRef) {
+      console.error("[backfill-teams] Express app not found");
+      return;
+    }
+    if (typeof readDB !== "function" || typeof writeDB !== "function") {
+      console.error("[backfill-teams] readDB/writeDB not found");
+      return;
+    }
+
+    function asStr(x) {
+      return (x === null || x === undefined) ? "" : String(x);
+    }
+
+    function buildTeamMap(db) {
+      const mapById = new Map();
+      const mapByName = new Map();
+
+      const all = []
+        .concat(Array.isArray(db.sgoPropLines) ? db.sgoPropLines : [])
+        .concat(Array.isArray(db.hardrockPropLines) ? db.hardrockPropLines : []);
+
+      for (const p of all) {
+        const team = asStr(p.team).trim();
+        if (!team) continue;
+        const pid = asStr(p.playerId).trim();
+        const name = asStr(p.playerName).trim();
+        if (pid) mapById.set(pid, team);
+        if (name) mapByName.set(name, team);
+      }
+
+      return { mapById, mapByName };
+    }
+
+    appRef.post("/api/dev/backfill-teams", async (req, res) => {
+      try {
+        const force = !!(req.body && req.body.force);
+
+        const db = await readDB();
+        db.nbaPlayerGameLogs = Array.isArray(db.nbaPlayerGameLogs) ? db.nbaPlayerGameLogs : [];
+        db.sgoPropLines = Array.isArray(db.sgoPropLines) ? db.sgoPropLines : [];
+        db.hardrockPropLines = Array.isArray(db.hardrockPropLines) ? db.hardrockPropLines : [];
+
+        const { mapById, mapByName } = buildTeamMap(db);
+
+        let updated = 0;
+        let missingAfter = 0;
+
+        for (const g of db.nbaPlayerGameLogs) {
+          const hasTeam = asStr(g.team).trim();
+          if (hasTeam && !force) continue;
+
+          const pid = asStr(g.playerId).trim();
+          const name = asStr(g.playerName).trim();
+
+          const inferred = (pid && mapById.get(pid)) || (name && mapByName.get(name)) || "";
+          if (inferred) {
+            g.team = inferred;
+            updated++;
+          } else {
+            // still missing
+            if (!hasTeam) missingAfter++;
+          }
+        }
+
+        await writeDB(db);
+
+        res.json({
+          ok: true,
+          updated,
+          missingAfter,
+          teamMap: { byId: mapById.size, byName: mapByName.size }
+        });
+      } catch (e) {
+        res.status(500).json({ ok: false, error: e.message || String(e) });
+      }
+    });
+
+    console.log("[backfill-teams] registered POST /api/dev/backfill-teams");
+  } catch (e) {
+    console.error("[backfill-teams] init error", e);
+  }
 })();
 
