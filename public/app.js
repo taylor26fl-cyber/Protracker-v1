@@ -5962,3 +5962,460 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Teams - Use SGO line button (auto-fill hit-rate line)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_TEAMS_USE_SGO_LINE__) return;
+  globalThis.__PT_TEAMS_USE_SGO_LINE__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  async function apiGet(url) {
+    const res = await fetch(url, { headers: { "Accept": "application/json" } });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  function num(x) {
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function statTypeForSGO(choice) {
+    // Your DB / imports likely use: "points", "rebounds", "assists", "3pm"
+    const c = String(choice || "").toLowerCase();
+    if (c.includes("reb")) return "rebounds";
+    if (c.includes("ast")) return "assists";
+    if (c.includes("3")) return "3pm";
+    return "points";
+  }
+
+  function getActiveDateFallback() {
+    // Prefer the main date picker if present
+    const d = document.getElementById("dateInput")?.value;
+    if (d) return d;
+
+    // fallback: from metaLine (best effort)
+    const meta = document.getElementById("metaLine")?.textContent || "";
+    const m = meta.match(/activeDate:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
+    if (m) return m[1];
+
+    // fallback: today
+    const now = new Date();
+    const y = now.getFullYear();
+    const mo = String(now.getMonth() + 1).padStart(2, "0");
+    const da = String(now.getDate()).padStart(2, "0");
+    return `${y}-${mo}-${da}`;
+  }
+
+  function getSelectedStat() {
+    // use the hit controls if present
+    return document.getElementById("ptHitStat")?.value || "PTS";
+  }
+
+  function ensureUseLineButton(detailEl) {
+    if (!detailEl) return;
+    if (detailEl.querySelector("#ptUseSgoLineBtn")) return;
+
+    const bar = document.createElement("div");
+    bar.style.marginTop = "10px";
+    bar.style.display = "flex";
+    bar.style.gap = "10px";
+    bar.style.flexWrap = "wrap";
+    bar.style.alignItems = "center";
+
+    bar.innerHTML = `
+      <button id="ptUseSgoLineBtn" type="button">Use SGO Line</button>
+      <div class="muted" id="ptUseSgoLineNote">Auto-fill line from today’s SGO props for selected stat.</div>
+    `;
+
+    detailEl.appendChild(bar);
+  }
+
+  async function findSgoLineForPlayer(date, playerName, statType) {
+    const data = await apiGet(`/api/odds/sgo/props-for-date?date=${encodeURIComponent(date)}&limit=500`);
+    const props = Array.isArray(data.props) ? data.props : [];
+
+    // Try exact match first
+    let match = props.find((p) =>
+      String(p.playerName || "").trim().toLowerCase() === String(playerName).trim().toLowerCase() &&
+      String(p.statType || "").trim().toLowerCase() === statType
+    );
+
+    // Fallback: loose name match (some feeds include suffixes)
+    if (!match) {
+      const pn = String(playerName).trim().toLowerCase();
+      match = props.find((p) => {
+        const n = String(p.playerName || "").trim().toLowerCase();
+        return n.includes(pn) || pn.includes(n);
+      });
+      if (match && String(match.statType || "").trim().toLowerCase() !== statType) match = null;
+    }
+
+    if (!match) return null;
+
+    const line = match.line ?? match.propLine ?? match.value;
+    const ln = num(line);
+    return ln === null ? null : { line: ln, raw: match };
+  }
+
+  function clickApplyIfExists() {
+    const b = document.getElementById("ptHitApply");
+    if (b) b.click();
+  }
+
+  function wirePlayerDetailListener() {
+    const detail = document.getElementById("ptTeamsPlayerDetail");
+    if (!detail || detail.__ptUseLineHooked) return;
+    detail.__ptUseLineHooked = true;
+
+    // Whenever detail changes, ensure the button exists
+    const obs = new MutationObserver(() => {
+      // Add button only when on teams page
+      if ((location.hash || "").toLowerCase() !== "#teams") return;
+      ensureUseLineButton(detail);
+    });
+    obs.observe(detail, { childList: true, subtree: true });
+  }
+
+  function wireButtonHandler() {
+    document.addEventListener("click", async (e) => {
+      const btn = e.target;
+      if (!btn || btn.id !== "ptUseSgoLineBtn") return;
+
+      try {
+        const detail = document.getElementById("ptTeamsPlayerDetail");
+        const title = detail?.querySelector("div")?.textContent || "";
+        // title like "BOS • Jayson Tatum" (best effort)
+        const parts = title.split("•").map((s) => s.trim());
+        const playerName = parts.length >= 2 ? parts[1] : "";
+
+        if (!playerName) {
+          if (window.ptToast) window.ptToast("Pick a player first", "warn");
+          return;
+        }
+
+        const date = getActiveDateFallback();
+        const statChoice = getSelectedStat();
+        const statType = statTypeForSGO(statChoice);
+
+        if (window.ptToast) window.ptToast("Finding SGO line…", "info");
+
+        const found = await findSgoLineForPlayer(date, playerName, statType);
+        if (!found) {
+          if (window.ptToast) window.ptToast("No SGO line found for this player/stat", "warn");
+          const note = document.getElementById("ptUseSgoLineNote");
+          if (note) note.textContent = `No SGO ${statType} line found for ${playerName} on ${date}.`;
+          return;
+        }
+
+        // Set the line input and apply
+        const lineInput = document.getElementById("ptHitLine");
+        if (lineInput) lineInput.value = String(found.line);
+
+        // Update note
+        const note = document.getElementById("ptUseSgoLineNote");
+        if (note) note.textContent = `Using SGO ${statType} line ${found.line} for ${playerName} (${date})`;
+
+        // Apply hit rates
+        clickApplyIfExists();
+
+        if (window.ptToast) window.ptToast(`Line set: ${found.line}`, "ok");
+      } catch (err) {
+        if (window.ptToast) window.ptToast("SGO line lookup failed", "bad");
+        const box = document.getElementById("errorBox");
+        if (box) { box.textContent = err.message || String(err); box.style.display = "block"; }
+      }
+    });
+  }
+
+  function init() {
+    wirePlayerDetailListener();
+    wireButtonHandler();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+
+// ===========================
+// FIX BLOCK: Master Router (single source of truth for page switching)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_MASTER_ROUTER__) return;
+  globalThis.__PT_MASTER_ROUTER__ = true;
+
+  const pages = [
+    { key: "dashboard", show: ["secDashboard"] }, // we will map dynamically below
+    { key: "props",     show: ["secProps"] },
+    { key: "edges",     show: ["secEdges"] },
+    { key: "leaders",   show: ["secLeaders"] },
+    { key: "status",    show: ["secStatus"] },
+    { key: "archive",   show: ["secArchive"] },
+    { key: "teams",     show: ["secTeams"] },
+  ];
+
+  function getSectionByKnownIds() {
+    // Best-effort mapping based on your existing element ids
+    const sec = {
+      secDashboard: null,
+      secProps: null,
+      secEdges: null,
+      secLeaders: null,
+      secStatus: null,
+      secArchive: null,
+      secTeams: null,
+    };
+
+    // "Dashboard" is basically the main page sections when no hash
+    // We'll treat it as: quick links + leaders + edges + sgo props + status (your default)
+    // but hide/show by section wrapper where possible.
+    const ql = document.getElementById("quickLinks")?.closest("section") || document.getElementById("quickLinks");
+    const leaders = document.getElementById("leaders")?.closest("section") || document.getElementById("leaders");
+    const edges = document.getElementById("edges")?.closest("section") || document.getElementById("edges");
+    const sgo = document.getElementById("sgoProps")?.closest("section") || document.getElementById("sgoProps");
+    const status = document.getElementById("status")?.closest("section") || document.getElementById("status");
+    const arch = document.getElementById("ptArchivePanel")?.closest("section") || document.getElementById("ptArchivePanel");
+    const teams = document.getElementById("ptTeamsPage")?.closest("section") || document.getElementById("ptTeamsPage");
+
+    sec.secDashboard = [ql, leaders, edges, sgo, status].filter(Boolean);
+    sec.secProps = [sgo].filter(Boolean);     // Props page = SGO props (and import bar if you have it)
+    sec.secEdges = [edges].filter(Boolean);
+    sec.secLeaders = [leaders].filter(Boolean);
+    sec.secStatus = [status].filter(Boolean);
+    sec.secArchive = [arch].filter(Boolean);
+    sec.secTeams = [teams].filter(Boolean);
+
+    return sec;
+  }
+
+  function hideNode(n) { if (n) n.style.display = "none"; }
+  function showNode(n) { if (n) n.style.display = ""; }
+
+  function showBarsFor(pageKey) {
+    // These are optional helper bars created by other blocks
+    const edgesTabs = document.getElementById("edgesTabs");
+    const sgoBar = document.getElementById("sgoImportBar");
+
+    if (edgesTabs) edgesTabs.style.display = (pageKey === "edges") ? "" : "none";
+    if (sgoBar) sgoBar.style.display = (pageKey === "props") ? "" : "none";
+  }
+
+  function normalizeHash() {
+    const raw = (location.hash || "").replace("#", "").trim().toLowerCase();
+    const allowed = new Set(["", "dashboard", "props", "edges", "leaders", "status", "archive", "teams"]);
+    if (!allowed.has(raw)) return "dashboard";
+    return raw === "" ? "dashboard" : raw;
+  }
+
+  function setActiveBottomNav(key) {
+    const nav = document.getElementById("ptBottomNav");
+    if (!nav) return;
+    [...nav.querySelectorAll("button")].forEach((b) => {
+      b.classList.toggle("active", b.dataset.page === key);
+    });
+  }
+
+  function setActiveTopNav(key) {
+    const nav = document.getElementById("ptNavBar");
+    if (!nav) return;
+    [...nav.querySelectorAll("button")].forEach((b) => {
+      b.classList.toggle("active", b.dataset.page === key);
+    });
+  }
+
+  function setTitle(key) {
+    const map = {
+      dashboard: "Dashboard",
+      props: "Props",
+      edges: "Edges",
+      leaders: "Leaders",
+      status: "Status",
+      archive: "Archive",
+      teams: "Teams",
+    };
+    const text = map[key] || "Dashboard";
+    const t = document.getElementById("ptPageTitle");
+    if (t && t.children && t.children[0]) t.children[0].textContent = text;
+    document.title = `ProTracker v1 • ${text}`;
+  }
+
+  function route() {
+    const key = normalizeHash();
+    const sec = getSectionByKnownIds();
+
+    // Hide everything first
+    Object.values(sec).forEach((arr) => {
+      if (Array.isArray(arr)) arr.forEach(hideNode);
+    });
+
+    // Show only the chosen page sections
+    const mapKeyToSec = {
+      dashboard: "secDashboard",
+      props: "secProps",
+      edges: "secEdges",
+      leaders: "secLeaders",
+      status: "secStatus",
+      archive: "secArchive",
+      teams: "secTeams",
+    };
+
+    const showList = sec[mapKeyToSec[key]] || [];
+    showList.forEach(showNode);
+
+    // Bars
+    showBarsFor(key);
+
+    // Nav highlight
+    setActiveBottomNav(key);
+    setActiveTopNav(key);
+
+    // Title
+    setTitle(key);
+  }
+
+  // Run AFTER other routers: delay slightly to "win"
+  function routeSoon() {
+    setTimeout(route, 0);
+    setTimeout(route, 80);
+  }
+
+  // Touch improvements: prevent double taps from racing hash changes
+  document.addEventListener("click", (e) => {
+    const el = e.target;
+    if (!el) return;
+    if (el.matches && el.matches("#ptBottomNav button, #ptNavBar button")) {
+      routeSoon();
+    }
+  }, true);
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      routeSoon();
+      window.addEventListener("hashchange", routeSoon);
+    });
+  } else {
+    routeSoon();
+    window.addEventListener("hashchange", routeSoon);
+  }
+})();
+
+// ===========================
+// FIX BLOCK: Force light theme on panels that were styled dark via inline JS
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_FORCE_LIGHT_PANELS__) return;
+  globalThis.__PT_FORCE_LIGHT_PANELS__ = true;
+
+  const IDS = [
+    "quickLinks",
+    "status",
+    "leaders",
+    "edges",
+    "sgoProps",
+    "ptTeamsPage",
+    "ptArchivePanel"
+  ];
+
+  function asCard(el) {
+    if (!el) return;
+
+    // If this element is inside a section, style the section instead
+    const card = el.closest("section") || el;
+
+    // Remove dark inline overrides
+    card.style.background = "#ffffff";
+    card.style.color = "#0f172a";
+    card.style.border = "1px solid rgba(148,163,184,.35)";
+    card.style.borderRadius = "20px";
+    card.style.boxShadow = "0 10px 25px rgba(15,23,42,.10)";
+    card.style.padding = card.tagName.toLowerCase() === "section" ? "" : "14px";
+    card.style.margin = card.tagName.toLowerCase() === "section" ? "" : "12px 0";
+
+    // Fix any children that got forced dark
+    const darkKids = card.querySelectorAll("*");
+    darkKids.forEach((n) => {
+      if (!(n instanceof HTMLElement)) return;
+      const cs = n.style;
+      if (!cs) return;
+
+      // If something set color to very light on dark bg, reset it.
+      if (cs.color && cs.color.toLowerCase().includes("255")) cs.color = "#0f172a";
+      // If a child has a dark background inline, clear it
+      if (cs.background && (cs.background.includes("rgb(0") || cs.background.includes("#0") || cs.background.includes("black"))) {
+        cs.background = "";
+      }
+    });
+  }
+
+  function fixAll() {
+    // Fix the meta/header panel if it exists
+    const metaLine = document.getElementById("metaLine");
+    if (metaLine) {
+      const wrap = metaLine.closest("section") || metaLine.parentElement;
+      if (wrap) asCard(wrap);
+    }
+
+    IDS.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) asCard(el);
+    });
+
+    // Also fix any big dark anonymous blocks (your screenshot shows some without ids)
+    document.querySelectorAll("section").forEach((sec) => {
+      // If background is dark-ish, force it light
+      const bg = (sec.style.background || "").toLowerCase();
+      if (bg.includes("rgb(0") || bg.includes("#0") || bg.includes("black")) asCard(sec);
+    });
+  }
+
+  // Run now and after async renders
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      fixAll();
+      setTimeout(fixAll, 300);
+      setTimeout(fixAll, 1200);
+    });
+  } else {
+    fixAll();
+    setTimeout(fixAll, 300);
+    setTimeout(fixAll, 1200);
+  }
+
+  // Re-run after navigation + refresh renders
+  window.addEventListener("hashchange", () => setTimeout(fixAll, 120));
+
+  // Hook your refresh button if present
+  const hook = () => {
+    const r = document.getElementById("refreshBtn");
+    if (r && !r.__ptLightHook) {
+      r.__ptLightHook = true;
+      r.addEventListener("click", () => {
+        setTimeout(fixAll, 120);
+        setTimeout(fixAll, 600);
+      });
+    }
+  };
+  setTimeout(hook, 0);
+  setTimeout(hook, 500);
+})();
+
