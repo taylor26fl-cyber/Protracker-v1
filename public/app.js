@@ -3283,3 +3283,201 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Pretty Edges UI (Tier tabs + table)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_PRETTY_EDGES__) return;
+  globalThis.__PT_PRETTY_EDGES__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  const state = {
+    tier: "A", // default tab
+    lastEdgesPayload: null
+  };
+
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function num(x) {
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function fmt(n, digits = 2) {
+    const v = num(n);
+    return v === null ? "" : v.toFixed(digits);
+  }
+
+  function makeTabs(host) {
+    if ($("edgesTabs")) return;
+
+    const bar = document.createElement("div");
+    bar.id = "edgesTabs";
+    bar.style.display = "flex";
+    bar.style.flexWrap = "wrap";
+    bar.style.gap = "10px";
+    bar.style.alignItems = "center";
+    bar.style.margin = "10px 0";
+
+    function tabBtn(label, tierKey) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.dataset.tier = tierKey;
+      b.style.padding = "10px 12px";
+      b.style.borderRadius = "14px";
+      b.style.fontWeight = "800";
+      b.style.border = "1px solid rgba(226,232,240,.95)";
+      b.style.background = "rgba(255,255,255,.85)";
+
+      function paint() {
+        const active = state.tier === tierKey;
+        b.style.borderColor = active ? "rgba(79,70,229,.55)" : "rgba(226,232,240,.95)";
+        b.style.boxShadow = active ? "0 10px 18px rgba(79,70,229,.12)" : "none";
+      }
+      paint();
+
+      b.addEventListener("click", () => {
+        state.tier = tierKey;
+        // repaint all
+        [...bar.querySelectorAll("button")].forEach((x) => {
+          const t = x.dataset.tier;
+          const active = state.tier === t;
+          x.style.borderColor = active ? "rgba(79,70,229,.55)" : "rgba(226,232,240,.95)";
+          x.style.boxShadow = active ? "0 10px 18px rgba(79,70,229,.12)" : "none";
+        });
+
+        // rerender from cached payload
+        if (state.lastEdgesPayload) window.renderEdges(state.lastEdgesPayload);
+      });
+
+      return b;
+    }
+
+    const meta = document.createElement("div");
+    meta.id = "edgesMeta2";
+    meta.className = "muted";
+    meta.style.marginLeft = "auto";
+    meta.textContent = "Tip: choose tier tabs";
+
+    bar.appendChild(tabBtn("Tier A", "A"));
+    bar.appendChild(tabBtn("Tier B", "B"));
+    bar.appendChild(tabBtn("Tier C", "C"));
+    bar.appendChild(meta);
+
+    host.parentNode.insertBefore(bar, host);
+  }
+
+  function normalizeRows(tiered) {
+    // tiered can be {A:[],B:[],C:[]} OR {A:{items:[]}} etc.
+    const raw = tiered?.[state.tier];
+    if (Array.isArray(raw)) return raw;
+    if (raw && Array.isArray(raw.items)) return raw.items;
+    return [];
+  }
+
+  function makeTable(rows) {
+    const wrap = document.createElement("div");
+    wrap.style.overflowX = "auto";
+
+    const t = document.createElement("table");
+    t.innerHTML = `
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Stat</th>
+          <th>Line</th>
+          <th>Proj</th>
+          <th>Edge</th>
+          <th>Team</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+    `;
+    const tb = document.createElement("tbody");
+
+    rows.forEach((r) => {
+      const player = r.playerName || r.player || r.playerId || "Unknown";
+      const stat = r.statType || r.stat || "";
+      const line = r.line ?? r.bookLine ?? "";
+      const proj = r.proj ?? r.projection ?? r.model ?? "";
+      const edge = r.edge ?? r.diff ?? "";
+      const team = r.team || "";
+      const source = r.source || r.book || "";
+
+      const e = num(edge);
+      let edgeStyle = "";
+      if (e !== null) {
+        const abs = Math.abs(e);
+        if (abs >= 5) edgeStyle = "background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.22);";
+        else if (abs >= 3) edgeStyle = "background: rgba(6,182,212,.10); border: 1px solid rgba(6,182,212,.20);";
+        else edgeStyle = "background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.22);";
+      }
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="font-weight:800;">${esc(player)}</td>
+        <td>${esc(stat)}</td>
+        <td>${esc(line)}</td>
+        <td>${esc(proj === "" ? "" : (typeof proj === "number" ? fmt(proj, 2) : proj))}</td>
+        <td>
+          <span style="display:inline-flex;align-items:center;justify-content:center;
+                       padding:6px 10px;border-radius:999px;font-weight:900;
+                       ${edgeStyle}">
+            ${esc(e === null ? edge : (e > 0 ? "+" : "") + fmt(e, 2))}
+          </span>
+        </td>
+        <td>${esc(team)}</td>
+        <td>${esc(source)}</td>
+      `;
+      tb.appendChild(tr);
+    });
+
+    t.appendChild(tb);
+    wrap.appendChild(t);
+    return wrap;
+  }
+
+  // Override renderEdges
+  window.renderEdges = function prettyEdges(data) {
+    const host = $("edges");
+    if (!host) return;
+
+    state.lastEdgesPayload = data;
+    makeTabs(host);
+
+    host.innerHTML = "";
+
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.textContent = `date: ${data.date} • gamesN: ${data.gamesN} • minEdge: ${data.minEdge} • total: ${data.counts?.total ?? "?"} • showing tier: ${state.tier}`;
+    host.appendChild(meta);
+
+    const tiered = data.tiered || {};
+    const rows = normalizeRows(tiered);
+
+    const meta2 = $("edgesMeta2");
+    if (meta2) meta2.textContent = `Tier ${state.tier}: ${rows.length} items`;
+
+    if (!rows.length) {
+      const pre = document.createElement("pre");
+      pre.textContent = `No edges in Tier ${state.tier}. Try lowering minEdge or changing date.`;
+      host.appendChild(pre);
+      return;
+    }
+
+    host.appendChild(makeTable(rows));
+  };
+})();
+
