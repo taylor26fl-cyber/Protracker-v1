@@ -4071,3 +4071,135 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Mobile Bottom Navigation Bar (app-like)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_BOTTOM_NAV__) return;
+  globalThis.__PT_BOTTOM_NAV__ = true;
+
+  const items = [
+    { key: "dashboard", label: "Home", icon: "🏠" },
+    { key: "props",     label: "Props", icon: "🧾" },
+    { key: "edges",     label: "Edges", icon: "⚡" },
+    { key: "leaders",   label: "Leaders", icon: "🏆" },
+    { key: "status",    label: "Status", icon: "🗂️" },
+    { key: "archive",   label: "Archive", icon: "📦" },
+  ];
+
+  function ensureBottomSpace() {
+    // Prevent bottom nav covering content
+    const styleId = "ptBottomNavStyle";
+    if (document.getElementById(styleId)) return;
+    const st = document.createElement("style");
+    st.id = styleId;
+    st.textContent = `
+      body { padding-bottom: 84px; }
+      #ptBottomNav{
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        z-index: 999;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+        align-items: stretch;
+        padding: 10px;
+        border-radius: 18px;
+        border: 1px solid rgba(226,232,240,.95);
+        background: rgba(255,255,255,.86);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 16px 40px rgba(15,23,42,.18);
+      }
+      .ptNavItem{
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        padding: 10px 6px;
+        border-radius: 14px;
+        border: 1px solid transparent;
+        background: transparent;
+        font-weight: 800;
+        font-size: 12px;
+      }
+      .ptNavItem .ptIcon{ font-size: 18px; line-height: 1; }
+      .ptNavItem.active{
+        border-color: rgba(79,70,229,.35);
+        background: linear-gradient(135deg, rgba(79,70,229,.12), rgba(6,182,212,.10));
+        box-shadow: 0 10px 18px rgba(79,70,229,.10);
+      }
+      @media (min-width: 900px){
+        /* Still show on desktop, but smaller feel */
+        #ptBottomNav{ max-width: 900px; margin: 0 auto; left: 0; right: 0; }
+      }
+    `;
+    document.head.appendChild(st);
+  }
+
+  function getPageFromHash() {
+    const h = (location.hash || "").replace("#", "").trim().toLowerCase();
+    const valid = new Set(items.map((x) => x.key));
+    return valid.has(h) ? h : "dashboard";
+  }
+
+  function setActiveBottom(key) {
+    const nav = document.getElementById("ptBottomNav");
+    if (!nav) return;
+    [...nav.querySelectorAll("button")].forEach((b) => {
+      b.classList.toggle("active", b.dataset.page === key);
+    });
+  }
+
+  function ensureBottomNav() {
+    if (document.getElementById("ptBottomNav")) return;
+
+    ensureBottomSpace();
+
+    const nav = document.createElement("div");
+    nav.id = "ptBottomNav";
+
+    items.forEach((it) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ptNavItem";
+      b.dataset.page = it.key;
+
+      const icon = document.createElement("div");
+      icon.className = "ptIcon";
+      icon.textContent = it.icon;
+
+      const label = document.createElement("div");
+      label.textContent = it.label;
+
+      b.appendChild(icon);
+      b.appendChild(label);
+
+      b.addEventListener("click", () => {
+        // This triggers the hashchange listener from your tabs/pages block
+        location.hash = `#${it.key}`;
+        setActiveBottom(it.key);
+      });
+
+      nav.appendChild(b);
+    });
+
+    document.body.appendChild(nav);
+
+    setActiveBottom(getPageFromHash());
+    window.addEventListener("hashchange", () => setActiveBottom(getPageFromHash()));
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ensureBottomNav);
+  } else {
+    ensureBottomNav();
+  }
+})();
+
