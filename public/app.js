@@ -5765,3 +5765,200 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Teams bettor metrics v2 (Median/StdDev/Consistency for L10)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_TEAMS_VOLATILITY__) return;
+  globalThis.__PT_TEAMS_VOLATILITY__ = true;
+
+  function num(x) {
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function fmt(n, d = 1) {
+    const v = num(n);
+    return v === null ? "" : v.toFixed(d);
+  }
+
+  function median(xs) {
+    const arr = xs.map(num).filter((v) => v !== null).sort((a, b) => a - b);
+    const n = arr.length;
+    if (!n) return null;
+    const mid = Math.floor(n / 2);
+    return n % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+  }
+
+  function mean(xs) {
+    const arr = xs.map(num).filter((v) => v !== null);
+    const n = arr.length;
+    if (!n) return null;
+    return arr.reduce((a, b) => a + b, 0) / n;
+  }
+
+  function stddev(xs) {
+    const arr = xs.map(num).filter((v) => v !== null);
+    const n = arr.length;
+    if (n < 2) return null;
+    const m = mean(arr);
+    const varSum = arr.reduce((acc, v) => acc + (v - m) * (v - m), 0);
+    return Math.sqrt(varSum / (n - 1));
+  }
+
+  function ensureSortOptions() {
+    const sel = document.getElementById("ptTeamsSort");
+    if (!sel) return;
+    const has = (val) => [...sel.options].some((o) => o.value === val);
+
+    if (!has("median10")) {
+      const o = document.createElement("option");
+      o.value = "median10";
+      o.textContent = "Median L10 (selected stat)";
+      sel.appendChild(o);
+    }
+    if (!has("sd10")) {
+      const o = document.createElement("option");
+      o.value = "sd10";
+      o.textContent = "Volatility (Std Dev L10)";
+      sel.appendChild(o);
+    }
+    if (!has("cons10")) {
+      const o = document.createElement("option");
+      o.value = "cons10";
+      o.textContent = "Consistency L10 (higher=steadier)";
+      sel.appendChild(o);
+    }
+  }
+
+  function ensureColumns() {
+    const wrap = document.getElementById("ptTeamsPlayers");
+    const table = wrap?.querySelector("table");
+    const thead = table?.querySelector("thead tr");
+    if (!table || !thead) return;
+
+    const headers = [...thead.children].map((th) => th.textContent.trim());
+    const add = (text) => {
+      if (headers.includes(text)) return;
+      const th = document.createElement("th");
+      th.textContent = text;
+      thead.appendChild(th);
+    };
+
+    add("Median L10");
+    add("StdDev L10");
+    add("Cons L10");
+
+    // Ensure every row has enough cells
+    const rows = table.querySelectorAll("tbody tr");
+    rows.forEach((tr) => {
+      while (tr.children.length < thead.children.length) {
+        const td = document.createElement("td");
+        td.textContent = "";
+        tr.appendChild(td);
+      }
+    });
+  }
+
+  function selectedStatKey() {
+    // Use same control from hit-rate block if present
+    const stat = document.getElementById("ptHitStat")?.value || "PTS";
+    const s = String(stat).toLowerCase();
+    if (s.includes("reb")) return "reb";
+    if (s.includes("ast")) return "ast";
+    if (s.includes("3")) return "fg3m";
+    return "pts";
+  }
+
+  function computeAndPaint() {
+    const idx = globalThis.__PT_TEAMS_INDEX__;
+    if (!idx) return;
+
+    ensureSortOptions();
+    ensureColumns();
+
+    // Determine active team from meta
+    const meta = document.getElementById("ptTeamsMeta")?.textContent || "";
+    let team = null;
+    const m = meta.match(/team:\s*([A-Za-z0-9_]+)/);
+    if (m) team = m[1];
+    if (!team) team = [...idx.keys()][0];
+
+    const playersMap = idx.get(team);
+    if (!playersMap) return;
+
+    const statKey = selectedStatKey();
+
+    // Build metric map by playerName for painting rows
+    const map = new Map();
+    for (const p of playersMap.values()) {
+      const games = (p.games || []).slice(0, 10);
+      const xs = games.map((g) => g[statKey]);
+      const med = median(xs);
+      const sd = stddev(xs);
+      // Consistency score: based on coefficient of variation (sd/mean), bounded 0-100
+      const mu = mean(xs);
+      let cons = null;
+      if (sd !== null && mu !== null && Math.abs(mu) > 0.0001) {
+        const cv = Math.abs(sd / mu);
+        cons = Math.max(0, Math.min(100, (1 - cv) * 100));
+      }
+      map.set(String(p.playerName), { med, sd, cons });
+    }
+
+    // Paint into table
+    const wrap = document.getElementById("ptTeamsPlayers");
+    const table = wrap?.querySelector("table");
+    const thead = table?.querySelector("thead tr");
+    const tbody = table?.querySelector("tbody");
+    if (!table || !thead || !tbody) return;
+
+    const headers = [...thead.children].map((th) => th.textContent.trim());
+    const iMed = headers.indexOf("Median L10");
+    const iSd = headers.indexOf("StdDev L10");
+    const iCons = headers.indexOf("Cons L10");
+
+    [...tbody.querySelectorAll("tr")].forEach((tr) => {
+      const name = tr.children[0]?.textContent?.trim() || "";
+      const r = map.get(name);
+      if (!r) return;
+
+      if (iMed >= 0) tr.children[iMed].textContent = fmt(r.med, 1);
+      if (iSd >= 0) tr.children[iSd].textContent = fmt(r.sd, 1);
+      if (iCons >= 0) tr.children[iCons].textContent = r.cons === null ? "" : `${Math.round(r.cons)}`;
+    });
+  }
+
+  function hookRerenders() {
+    // When user changes stat in hit controls, recompute these metrics too
+    const stat = document.getElementById("ptHitStat");
+    if (stat && !stat.__ptVolHook) {
+      stat.__ptVolHook = true;
+      stat.addEventListener("change", () => setTimeout(computeAndPaint, 50));
+    }
+
+    // When Teams page changes table (team click), paint after render
+    window.addEventListener("hashchange", () => {
+      if ((location.hash || "").toLowerCase() === "#teams") {
+        setTimeout(computeAndPaint, 250);
+      }
+    });
+  }
+
+  function onOpenTeams() {
+    if ((location.hash || "").toLowerCase() === "#teams") {
+      setTimeout(computeAndPaint, 250);
+      hookRerenders();
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", onOpenTeams);
+  } else {
+    onOpenTeams();
+  }
+})();
+
