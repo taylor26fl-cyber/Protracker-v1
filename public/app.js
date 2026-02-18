@@ -3705,3 +3705,369 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Upgrade SGO Props Table (source pills + copy row JSON)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_SGO_TABLE_UPGRADE__) return;
+  globalThis.__PT_SGO_TABLE_UPGRADE__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch {}
+      document.body.removeChild(ta);
+      return true;
+    }
+  }
+
+  function normalizeStatLabel(statType) {
+    const s = String(statType || "").toLowerCase();
+    if (s === "points" || s === "pts") return "points";
+    if (s === "rebounds" || s === "reb") return "rebounds";
+    if (s === "assists" || s === "ast") return "assists";
+    if (s === "3pm" || s === "threes" || s === "threes_made" || s === "3pt" || s === "fg3m") return "3pm";
+    return statType || "unknown";
+  }
+
+  function pill(text, kind) {
+    const p = document.createElement("span");
+    p.textContent = text || "";
+    p.style.display = "inline-flex";
+    p.style.alignItems = "center";
+    p.style.justifyContent = "center";
+    p.style.padding = "5px 10px";
+    p.style.borderRadius = "999px";
+    p.style.fontSize = "12px";
+    p.style.fontWeight = "800";
+    p.style.whiteSpace = "nowrap";
+
+    const styles = {
+      indigo: { bg: "rgba(79,70,229,.12)", bd: "rgba(79,70,229,.25)", fg: "#1f2a85" },
+      cyan:   { bg: "rgba(6,182,212,.10)", bd: "rgba(6,182,212,.22)", fg: "#0b5460" },
+      green:  { bg: "rgba(16,185,129,.12)", bd: "rgba(16,185,129,.25)", fg: "#0b5a3e" },
+      amber:  { bg: "rgba(245,158,11,.14)", bd: "rgba(245,158,11,.25)", fg: "#7a4b00" },
+      slate:  { bg: "rgba(148,163,184,.16)", bd: "rgba(148,163,184,.28)", fg: "#334155" },
+    };
+
+    const c = styles[kind] || styles.slate;
+    p.style.background = c.bg;
+    p.style.border = `1px solid ${c.bd}`;
+    p.style.color = c.fg;
+    return p;
+  }
+
+  function kindForSource(s) {
+    const x = String(s || "").toLowerCase();
+    if (x.includes("dk") || x.includes("draft")) return "indigo";
+    if (x.includes("fd") || x.includes("fan")) return "cyan";
+    if (x.includes("mgm") || x.includes("betmgm")) return "green";
+    if (x.includes("caes") || x.includes("hardrock") || x.includes("hr")) return "amber";
+    return "slate";
+  }
+
+  function getFilters() {
+    const q = ($("sgoSearchInput")?.value || "").trim().toLowerCase();
+    const statChoice = ($("sgoStatSelect")?.value || "all").toLowerCase();
+    const sortChoice = ($("sgoSortSelect")?.value || "name");
+    return { q, statChoice, sortChoice };
+  }
+
+  function applyFilters(props) {
+    const { q, statChoice, sortChoice } = getFilters();
+    let out = Array.isArray(props) ? props.slice() : [];
+
+    if (q) out = out.filter((p) => String(p.playerName || p.playerId || "").toLowerCase().includes(q));
+    if (statChoice !== "all") out = out.filter((p) => normalizeStatLabel(p.statType).toLowerCase() === statChoice);
+
+    if (sortChoice === "name") {
+      out.sort((a, b) => String(a.playerName || "").localeCompare(String(b.playerName || "")));
+    } else if (sortChoice === "stat") {
+      out.sort((a, b) => String(normalizeStatLabel(a.statType)).localeCompare(String(normalizeStatLabel(b.statType))));
+    } else if (sortChoice === "lineDesc") {
+      out.sort((a, b) => Number(b.line ?? -Infinity) - Number(a.line ?? -Infinity));
+    } else if (sortChoice === "lineAsc") {
+      out.sort((a, b) => Number(a.line ?? Infinity) - Number(b.line ?? Infinity));
+    }
+
+    return out;
+  }
+
+  function makeTable(rows) {
+    const wrap = document.createElement("div");
+    wrap.style.overflowX = "auto";
+
+    const t = document.createElement("table");
+    t.innerHTML = `
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Stat</th>
+          <th>Line</th>
+          <th>Side</th>
+          <th>Team</th>
+          <th>Source</th>
+          <th></th>
+        </tr>
+      </thead>
+    `;
+
+    const tb = document.createElement("tbody");
+
+    rows.forEach((p) => {
+      const tr = document.createElement("tr");
+
+      const src = String(p.source || p.book || "");
+      const srcPill = pill(src || "unknown", kindForSource(src));
+
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.textContent = "Copy";
+      copyBtn.style.padding = "8px 10px";
+      copyBtn.style.fontSize = "14px";
+      copyBtn.style.borderRadius = "12px";
+
+      copyBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const txt = JSON.stringify(p, null, 2);
+        await copyText(txt);
+        const old = copyBtn.textContent;
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => (copyBtn.textContent = old), 800);
+      });
+
+      tr.innerHTML = `
+        <td style="font-weight:800;">${esc(p.playerName || p.playerId || "Unknown")}</td>
+        <td>${esc(normalizeStatLabel(p.statType))}</td>
+        <td>${esc(p.line ?? "")}</td>
+        <td>${esc((p.side || "").toLowerCase())}</td>
+        <td>${esc(p.team || "")}</td>
+        <td></td>
+        <td></td>
+      `;
+
+      tr.children[5].appendChild(srcPill);
+      tr.children[6].appendChild(copyBtn);
+
+      tb.appendChild(tr);
+    });
+
+    t.appendChild(tb);
+    wrap.appendChild(t);
+    return wrap;
+  }
+
+  // Override renderSgoProps again (upgrade)
+  window.renderSgoProps = function renderSgoPropsUpgraded(data) {
+    const wrap = $("sgoProps");
+    if (!wrap) return;
+
+    // Cache payload for re-filtering
+    globalThis.__PT_LAST_SGO_PROPS__ = data;
+
+    wrap.innerHTML = "";
+
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.textContent = `date: ${data.date} • count: ${data.count}`;
+    wrap.appendChild(meta);
+
+    const props = Array.isArray(data.props) ? data.props : [];
+    const filtered = applyFilters(props);
+
+    const meta2 = document.createElement("div");
+    meta2.className = "muted";
+    meta2.style.marginTop = "6px";
+    meta2.textContent = `showing: ${filtered.length} / ${props.length}`;
+    wrap.appendChild(meta2);
+
+    if (!filtered.length) {
+      const pre = document.createElement("pre");
+      pre.textContent = "No matching props. Try clearing search/filter.";
+      wrap.appendChild(pre);
+      return;
+    }
+
+    wrap.appendChild(makeTable(filtered));
+  };
+})();
+
+// ===========================
+// NEXT BLOCK: App-style navigation (tabs/pages) for one-page UI
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_NAV_PAGES__) return;
+  globalThis.__PT_NAV_PAGES__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  const pages = [
+    { key: "dashboard", label: "Dashboard", show: ["quickLinks"] },
+    { key: "props",     label: "Props",     show: ["sgoProps"] },
+    { key: "edges",     label: "Edges",     show: ["edges"] },
+    { key: "leaders",   label: "Leaders",   show: ["leaders"] },
+    { key: "status",    label: "Status",    show: ["status"] },
+    { key: "archive",   label: "Archive",   show: ["archiveOutput", "ptArchivePanel"] }, // supports both ids
+  ];
+
+  function findSectionForId(id) {
+    // Your HTML has containers like <div id="leaders"> inside a <section>.
+    // We’ll hide the nearest <section> if possible; fallback to element itself.
+    const node = $(id);
+    if (!node) return null;
+    return node.closest("section") || node;
+  }
+
+  function ensureNav() {
+    if (document.getElementById("ptNavBar")) return;
+
+    const header = document.querySelector("header") || document.body;
+
+    const navWrap = document.createElement("div");
+    navWrap.id = "ptNavBar";
+    navWrap.style.display = "flex";
+    navWrap.style.flexWrap = "wrap";
+    navWrap.style.gap = "8px";
+    navWrap.style.alignItems = "center";
+    navWrap.style.marginTop = "10px";
+
+    function makeBtn(p) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = p.label;
+      b.dataset.page = p.key;
+      b.style.padding = "10px 12px";
+      b.style.borderRadius = "14px";
+      b.style.fontWeight = "900";
+      b.style.border = "1px solid rgba(226,232,240,.95)";
+      b.style.background = "rgba(255,255,255,.85)";
+      b.style.whiteSpace = "nowrap";
+
+      b.addEventListener("click", () => setPage(p.key, true));
+      return b;
+    }
+
+    pages.forEach((p) => navWrap.appendChild(makeBtn(p)));
+
+    // put nav after the H1 (if present)
+    const h1 = header.querySelector("h1");
+    if (h1 && h1.parentNode === header) {
+      header.insertBefore(navWrap, h1.nextSibling);
+    } else {
+      header.appendChild(navWrap);
+    }
+  }
+
+  function setActiveButton(key) {
+    const nav = document.getElementById("ptNavBar");
+    if (!nav) return;
+    [...nav.querySelectorAll("button")].forEach((b) => {
+      const active = b.dataset.page === key;
+      b.style.borderColor = active ? "rgba(79,70,229,.55)" : "rgba(226,232,240,.95)";
+      b.style.boxShadow = active ? "0 10px 18px rgba(79,70,229,.12)" : "none";
+    });
+  }
+
+  function hideAll() {
+    // Hide all known containers’ sections
+    const ids = new Set();
+    pages.forEach((p) => p.show.forEach((id) => ids.add(id)));
+
+    ids.forEach((id) => {
+      const sec = findSectionForId(id);
+      if (sec) sec.style.display = "none";
+    });
+
+    // Also hide the SGO controls bar + import bars if present when not on props
+    const maybe = ["sgoImportBar", "edgesTabs"];
+    maybe.forEach((id) => {
+      const n = document.getElementById(id);
+      if (n) n.style.display = "none";
+    });
+
+    // Top actions is great everywhere; keep it visible
+  }
+
+  function showForPage(key) {
+    const page = pages.find((p) => p.key === key) || pages[0];
+
+    page.show.forEach((id) => {
+      const sec = findSectionForId(id);
+      if (sec) sec.style.display = "";
+    });
+
+    // Show helpers for certain pages
+    if (key === "props") {
+      const n1 = document.getElementById("sgoImportBar");
+      if (n1) n1.style.display = "";
+      const controlsRow = document.getElementById("sgoSearchInput")?.parentElement;
+      if (controlsRow) controlsRow.style.display = "";
+    }
+    if (key === "edges") {
+      const n2 = document.getElementById("edgesTabs");
+      if (n2) n2.style.display = "";
+    }
+    if (key === "archive") {
+      const p = document.getElementById("ptArchivePanel");
+      if (p) p.style.display = "";
+    }
+  }
+
+  function setPage(key, pushHash) {
+    hideAll();
+    showForPage(key);
+    setActiveButton(key);
+    if (pushHash) location.hash = `#${key}`;
+  }
+
+  function initialPage() {
+    const h = (location.hash || "").replace("#", "").trim().toLowerCase();
+    if (pages.some((p) => p.key === h)) return h;
+    return "dashboard";
+  }
+
+  function main() {
+    ensureNav();
+
+    // Make sure Archive panel is not hidden forever if it exists
+    const key = initialPage();
+    setPage(key, false);
+
+    window.addEventListener("hashchange", () => {
+      const k = initialPage();
+      setPage(k, false);
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", main);
+  } else {
+    main();
+  }
+})();
+
