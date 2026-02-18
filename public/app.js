@@ -3005,3 +3005,281 @@ function wireUI() {
   };
 })();
 
+// ===========================
+// NEXT BLOCK: Top Actions Bar (Backup/Restore/Warm/Import SGO) - mobile friendly
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_TOP_ACTIONS__) return;
+  globalThis.__PT_TOP_ACTIONS__ = true;
+
+  const el = (id) => document.getElementById(id);
+
+  async function apiGet(url) {
+    const res = await fetch(url, { headers: { "Accept": "application/json" } });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  async function apiPost(url, bodyObj) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(bodyObj || {})
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  function showError(msg) {
+    const box = el("errorBox");
+    if (!box) return;
+    box.textContent = msg;
+    box.style.display = "block";
+  }
+
+  function clearError() {
+    const box = el("errorBox");
+    if (!box) return;
+    box.textContent = "";
+    box.style.display = "none";
+  }
+
+  function setMetaLine(msg) {
+    const m = el("metaLine");
+    if (m) m.textContent = msg || "";
+  }
+
+  function downloadJson(filename, obj) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  function makeActionsUI() {
+    if (el("ptActionsBar")) return;
+
+    // Insert into header if possible, else top of body
+    const header = document.querySelector("header") || document.body;
+
+    const section = document.createElement("section");
+    section.id = "ptActionsBar";
+    section.style.marginTop = "10px";
+    section.style.borderRadius = "18px";
+
+    const title = document.createElement("div");
+    title.style.display = "flex";
+    title.style.justifyContent = "space-between";
+    title.style.alignItems = "center";
+    title.style.gap = "10px";
+    title.style.marginBottom = "10px";
+
+    const h = document.createElement("div");
+    h.style.fontWeight = "900";
+    h.style.fontSize = "15px";
+    h.textContent = "Top Actions";
+
+    const hint = document.createElement("div");
+    hint.className = "muted";
+    hint.textContent = "Backup/Restore + fast tools";
+
+    title.appendChild(h);
+    title.appendChild(hint);
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.flexWrap = "wrap";
+    row.style.gap = "10px";
+    row.style.alignItems = "center";
+
+    const btnBackup = document.createElement("button");
+    btnBackup.type = "button";
+    btnBackup.textContent = "Backup DB (JSON)";
+
+    const btnWarm = document.createElement("button");
+    btnWarm.type = "button";
+    btnWarm.textContent = "Warm Leaders";
+
+    const btnImport = document.createElement("button");
+    btnImport.type = "button";
+    btnImport.textContent = "Import SGO Props";
+
+    const restoreBox = document.createElement("textarea");
+    restoreBox.id = "restoreTextarea";
+    restoreBox.placeholder = "Paste DB JSON here to restore…";
+    restoreBox.rows = 5;
+    restoreBox.style.width = "100%";
+    restoreBox.style.maxWidth = "100%";
+    restoreBox.style.padding = "10px 12px";
+    restoreBox.style.borderRadius = "14px";
+    restoreBox.style.border = "1px solid rgba(226,232,240,.95)";
+    restoreBox.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+    restoreBox.style.fontSize = "12px";
+
+    const btnRestore = document.createElement("button");
+    btnRestore.type = "button";
+    btnRestore.textContent = "Restore DB (Paste)";
+
+    const bar2 = document.createElement("div");
+    bar2.style.display = "flex";
+    bar2.style.flexWrap = "wrap";
+    bar2.style.gap = "10px";
+    bar2.style.alignItems = "center";
+    bar2.style.marginTop = "10px";
+
+    const date = document.createElement("input");
+    date.type = "date";
+    date.id = "actionsDate";
+    date.style.maxWidth = "220px";
+
+    const lim = document.createElement("input");
+    lim.type = "number";
+    lim.min = "1";
+    lim.max = "50";
+    lim.value = "10";
+    lim.id = "actionsLimit";
+    lim.style.maxWidth = "120px";
+
+    const book = document.createElement("input");
+    book.type = "text";
+    book.placeholder = "bookmakerID optional";
+    book.id = "actionsBook";
+    book.style.minWidth = "220px";
+    book.style.flex = "1";
+
+    bar2.appendChild(date);
+    bar2.appendChild(lim);
+    bar2.appendChild(book);
+
+    row.appendChild(btnBackup);
+    row.appendChild(btnWarm);
+    row.appendChild(btnImport);
+
+    section.appendChild(title);
+    section.appendChild(row);
+    section.appendChild(bar2);
+
+    const restoreTitle = document.createElement("div");
+    restoreTitle.className = "muted";
+    restoreTitle.style.marginTop = "12px";
+    restoreTitle.style.fontWeight = "800";
+    restoreTitle.textContent = "Restore DB";
+
+    const restoreRow = document.createElement("div");
+    restoreRow.style.display = "flex";
+    restoreRow.style.flexWrap = "wrap";
+    restoreRow.style.gap = "10px";
+    restoreRow.style.alignItems = "center";
+    restoreRow.style.marginTop = "10px";
+
+    restoreRow.appendChild(btnRestore);
+
+    section.appendChild(restoreTitle);
+    section.appendChild(restoreBox);
+    section.appendChild(restoreRow);
+
+    header.appendChild(section);
+
+    // default date = whatever main dateInput is set to
+    const mainDate = el("dateInput")?.value;
+    if (mainDate) date.value = mainDate;
+
+    // Handlers
+    btnBackup.addEventListener("click", async () => {
+      clearError();
+      try {
+        setMetaLine("Backing up DB…");
+        const data = await apiGet("/api/db/export");
+        const ts = new Date().toISOString().replaceAll(":", "-");
+        downloadJson(`protracker-db-${ts}.json`, data);
+        setMetaLine("Backup downloaded ✅");
+      } catch (e) {
+        showError(e.message || String(e));
+        setMetaLine("Backup failed");
+      }
+    });
+
+    btnRestore.addEventListener("click", async () => {
+      clearError();
+      try {
+        const raw = restoreBox.value.trim();
+        if (!raw) throw new Error("Paste your DB JSON into the box first.");
+        let obj;
+        try { obj = JSON.parse(raw); } catch { throw new Error("Invalid JSON pasted."); }
+
+        setMetaLine("Restoring DB…");
+        const out = await apiPost("/api/db/restore", obj);
+        setMetaLine(`Restore OK ✅ ${out.ts || ""}`.trim());
+
+        // Refresh everything
+        if (typeof window.refreshAll === "function") await window.refreshAll();
+      } catch (e) {
+        showError(e.message || String(e));
+        setMetaLine("Restore failed");
+      }
+    });
+
+    btnWarm.addEventListener("click", async () => {
+      clearError();
+      try {
+        setMetaLine("Warming leaders…");
+        const out = await apiPost("/api/nba/stats/warm", {});
+        setMetaLine(`Leaders warmed ✅ ts: ${out.ts}`);
+        if (typeof window.refreshAll === "function") await window.refreshAll();
+      } catch (e) {
+        showError(e.message || String(e));
+        setMetaLine("Warm failed");
+      }
+    });
+
+    btnImport.addEventListener("click", async () => {
+      clearError();
+      try {
+        const d = date.value || el("dateInput")?.value || "";
+        const l = Number(lim.value || 10);
+        const bookmakerID = (book.value || "").trim();
+
+        if (!d) throw new Error("Pick a date first.");
+
+        setMetaLine("Importing SGO props…");
+        const q = new URLSearchParams({ date: d, limit: String(l) });
+
+        const out = await apiPost(`/api/import/sgo-props?${q.toString()}`, { bookmakerID });
+
+        setMetaLine(`SGO import ✅ ${out.date || d}`);
+        if (typeof window.refreshAll === "function") await window.refreshAll();
+      } catch (e) {
+        showError(e.message || String(e));
+        setMetaLine("Import failed");
+      }
+    });
+  }
+
+  // Mount after DOM is ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", makeActionsUI);
+  } else {
+    makeActionsUI();
+  }
+})();
+
