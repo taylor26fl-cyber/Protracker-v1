@@ -5066,3 +5066,406 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: FULL Teams -> Players -> Player Stats (from /api/db/export)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_TEAMS_FULL__) return;
+  globalThis.__PT_TEAMS_FULL__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  async function apiGet(url) {
+    const res = await fetch(url, { headers: { "Accept": "application/json" } });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function num(x) {
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function avg(arr) {
+    const xs = arr.map(num).filter((x) => x !== null);
+    if (!xs.length) return null;
+    return xs.reduce((a, b) => a + b, 0) / xs.length;
+  }
+
+  function fmt(n, d = 1) {
+    const v = num(n);
+    return v === null ? "" : v.toFixed(d);
+  }
+
+  function sortByDateDesc(a, b) {
+    return String(b.gameDate || "").localeCompare(String(a.gameDate || ""));
+  }
+
+  function inferTeamMaps(db) {
+    const logs = Array.isArray(db.nbaPlayerGameLogs) ? db.nbaPlayerGameLogs : [];
+    const sgo = Array.isArray(db.sgoPropLines) ? db.sgoPropLines : [];
+    const hr  = Array.isArray(db.hardrockPropLines) ? db.hardrockPropLines : [];
+    const propsAll = [...sgo, ...hr];
+
+    const byId = new Map();
+    const byName = new Map();
+
+    for (const p of propsAll) {
+      const t = (p.team || "").trim();
+      if (!t) continue;
+      if (p.playerId) byId.set(String(p.playerId), t);
+      if (p.playerName) byName.set(String(p.playerName), t);
+    }
+
+    for (const g of logs) {
+      const t = (g.team || g.teamAbbr || "").trim();
+      if (!t) continue;
+      if (g.playerId) byId.set(String(g.playerId), t);
+      if (g.playerName) byName.set(String(g.playerName), t);
+    }
+
+    return { byId, byName };
+  }
+
+  function buildTeamsIndex(db) {
+    const logs = Array.isArray(db.nbaPlayerGameLogs) ? db.nbaPlayerGameLogs : [];
+    const { byId, byName } = inferTeamMaps(db);
+
+    const teams = new Map(); // team -> Map(playerKey -> playerObj)
+
+    for (const g of logs) {
+      const pid = g.playerId ? String(g.playerId) : "";
+      const pname = g.playerName ? String(g.playerName) : "Unknown";
+
+      const team =
+        (g.team || g.teamAbbr || "").trim() ||
+        (pid && byId.get(pid)) ||
+        (pname && byName.get(pname)) ||
+        "UNK";
+
+      if (!teams.has(team)) teams.set(team, new Map());
+      const players = teams.get(team);
+
+      const key = pid || pname;
+      if (!players.has(key)) players.set(key, { playerId: pid, playerName: pname, team, games: [] });
+      players.get(key).games.push(g);
+    }
+
+    // sort games
+    for (const [, players] of teams) {
+      for (const [, p] of players) p.games.sort(sortByDateDesc);
+    }
+
+    return teams;
+  }
+
+  function metricsForPlayer(p) {
+    const games = p.games || [];
+    const gp = games.length;
+    const l5 = games.slice(0, 5);
+    const l10 = games.slice(0, 10);
+
+    const m = (arr, key) => avg(arr.map((x) => x[key]));
+
+    const pts5 = m(l5, "pts"), reb5 = m(l5, "reb"), ast5 = m(l5, "ast"), tpm5 = m(l5, "fg3m");
+    const pts10 = m(l10, "pts"), reb10 = m(l10, "reb"), ast10 = m(l10, "ast"), tpm10 = m(l10, "fg3m");
+
+    const trendPts = (pts5 !== null && pts10 !== null) ? (pts5 - pts10) : null;
+
+    return { gp, pts5, reb5, ast5, tpm5, pts10, reb10, ast10, tpm10, trendPts };
+  }
+
+  function ensureTeamsUI() {
+    let sec = $("ptTeamsPage");
+    if (!sec) {
+      // create if missing
+      const main = document.querySelector("main") || document.body;
+      sec = document.createElement("section");
+      sec.id = "ptTeamsPage";
+      sec.style.display = "none";
+      main.appendChild(sec);
+    }
+
+    // If already filled, leave as-is
+    if (sec.__ptBuilt) return;
+    sec.__ptBuilt = true;
+
+    sec.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="font-weight:950;font-size:16px;">Teams</div>
+        <div class="muted" id="ptTeamsMeta">Ready.</div>
+      </div>
+
+      <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <input id="ptTeamsSearch" placeholder="Search team or player…" style="flex:1; min-width:220px;" />
+        <select id="ptTeamsSort" style="max-width:240px;">
+          <option value="pts5">PTS L5</option>
+          <option value="pts10">PTS L10</option>
+          <option value="trendPts">Trend PTS (L5-L10)</option>
+          <option value="reb5">REB L5</option>
+          <option value="ast5">AST L5</option>
+          <option value="tpm5">3PM L5</option>
+          <option value="gp">GP</option>
+          <option value="name">Name A→Z</option>
+        </select>
+        <button id="ptTeamsReload" type="button">Reload</button>
+      </div>
+
+      <div style="margin-top:12px; display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px;">
+        <div>
+          <div class="muted" style="font-weight:900;margin-bottom:6px;">Teams</div>
+          <div id="ptTeamsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+
+        <div>
+          <div class="muted" style="font-weight:900;margin-bottom:6px;">Players</div>
+          <div id="ptTeamsPlayers"></div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;">
+        <div class="muted" style="font-weight:900;margin-bottom:6px;">Player Details</div>
+        <div id="ptTeamsPlayerDetail" class="muted">Pick a team, then a player.</div>
+      </div>
+    `;
+  }
+
+  function renderTeams(teamsIndex) {
+    const meta = $("ptTeamsMeta");
+    const teamsList = $("ptTeamsList");
+    const playersWrap = $("ptTeamsPlayers");
+    const detail = $("ptTeamsPlayerDetail");
+    const q = ($("ptTeamsSearch")?.value || "").trim().toLowerCase();
+    const sortKey = ($("ptTeamsSort")?.value || "pts5");
+
+    if (!teamsList || !playersWrap || !detail) return;
+
+    meta.textContent = `teams: ${teamsIndex.size} • tap a team`;
+
+    teamsList.innerHTML = "";
+    playersWrap.innerHTML = "";
+    detail.textContent = "Pick a team, then a player.";
+
+    const teamKeys = [...teamsIndex.keys()].sort((a, b) => a.localeCompare(b));
+
+    function teamBtn(team) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = team;
+      b.style.textAlign = "left";
+      b.style.width = "100%";
+      b.style.padding = "10px 12px";
+      b.style.borderRadius = "14px";
+      b.addEventListener("click", () => renderPlayers(team));
+      return b;
+    }
+
+    teamKeys.forEach((team) => {
+      // keep teams list broad; search will also filter players
+      if (q && !team.toLowerCase().includes(q)) {
+        // still show team; user might be searching a player name, not team
+      }
+      teamsList.appendChild(teamBtn(team));
+    });
+
+    function sortPlayers(arr) {
+      if (sortKey === "name") {
+        return arr.sort((a, b) => String(a.playerName).localeCompare(String(b.playerName)));
+      }
+      return arr.sort((a, b) => {
+        const av = a.m[sortKey]; const bv = b.m[sortKey];
+        const an = (av === null || av === undefined) ? -Infinity : Number(av);
+        const bn = (bv === null || bv === undefined) ? -Infinity : Number(bv);
+        return bn - an;
+      });
+    }
+
+    function renderPlayers(team) {
+      playersWrap.innerHTML = "";
+
+      const playersMap = teamsIndex.get(team);
+      if (!playersMap) return;
+
+      let players = [...playersMap.values()].map((p) => ({ ...p, m: metricsForPlayer(p) }));
+
+      // filter by search
+      if (q) {
+        players = players.filter((p) =>
+          team.toLowerCase().includes(q) ||
+          String(p.playerName).toLowerCase().includes(q)
+        );
+      }
+
+      sortPlayers(players);
+
+      const box = document.createElement("div");
+      box.style.overflowX = "auto";
+
+      const t = document.createElement("table");
+      t.innerHTML = `
+        <thead>
+          <tr>
+            <th>Player</th><th>GP</th><th>PTS L5</th><th>PTS L10</th><th>Trend</th><th>REB L5</th><th>AST L5</th><th>3PM L5</th>
+          </tr>
+        </thead>
+      `;
+      const tb = document.createElement("tbody");
+
+      players.forEach((p) => {
+        const tr = document.createElement("tr");
+        tr.style.cursor = "pointer";
+        tr.innerHTML = `
+          <td style="font-weight:900;">${esc(p.playerName)}</td>
+          <td>${esc(p.m.gp)}</td>
+          <td>${esc(fmt(p.m.pts5, 1))}</td>
+          <td>${esc(fmt(p.m.pts10, 1))}</td>
+          <td>${esc(p.m.trendPts === null ? "" : (p.m.trendPts >= 0 ? "+" : "") + fmt(p.m.trendPts, 1))}</td>
+          <td>${esc(fmt(p.m.reb5, 1))}</td>
+          <td>${esc(fmt(p.m.ast5, 1))}</td>
+          <td>${esc(fmt(p.m.tpm5, 1))}</td>
+        `;
+        tr.addEventListener("click", () => renderPlayer(team, p));
+        tb.appendChild(tr);
+      });
+
+      t.appendChild(tb);
+      box.appendChild(t);
+      playersWrap.appendChild(box);
+
+      meta.textContent = `team: ${team} • players: ${players.length}`;
+
+      if (players[0]) renderPlayer(team, players[0]);
+    }
+
+    function renderPlayer(team, p) {
+      const games = (p.games || []).slice().sort(sortByDateDesc);
+      const l5 = games.slice(0, 5);
+      const l10 = games.slice(0, 10);
+
+      const card = (title, text) => `
+        <div style="border:1px solid rgba(226,232,240,.95); border-radius:16px; padding:10px; background:rgba(255,255,255,.85);">
+          <div class="muted" style="font-weight:900;">${esc(title)}</div>
+          <div style="margin-top:6px; font-weight:900;">${text}</div>
+        </div>
+      `;
+
+      const l5Text = `PTS ${fmt(avg(l5.map(x=>x.pts)),1)} • REB ${fmt(avg(l5.map(x=>x.reb)),1)} • AST ${fmt(avg(l5.map(x=>x.ast)),1)} • 3PM ${fmt(avg(l5.map(x=>x.fg3m)),1)}`;
+      const l10Text = `PTS ${fmt(avg(l10.map(x=>x.pts)),1)} • REB ${fmt(avg(l10.map(x=>x.reb)),1)} • AST ${fmt(avg(l10.map(x=>x.ast)),1)} • 3PM ${fmt(avg(l10.map(x=>x.fg3m)),1)}`;
+
+      detail.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="font-weight:950;font-size:16px;">${esc(team)} • ${esc(p.playerName)}</div>
+          <div class="muted">GP: ${esc(games.length)}</div>
+        </div>
+
+        <div style="margin-top:10px; display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px;">
+          ${card("Last 5 Avg", esc(l5Text))}
+          ${card("Last 10 Avg", esc(l10Text))}
+        </div>
+
+        <div class="muted" style="font-weight:900;margin-top:12px;">Recent Games</div>
+        <div style="overflow-x:auto;margin-top:6px;">
+          <table>
+            <thead><tr><th>Date</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th></tr></thead>
+            <tbody>
+              ${games.slice(0, 12).map(g => `
+                <tr>
+                  <td>${esc(g.gameDate)}</td>
+                  <td>${esc(g.pts ?? "")}</td>
+                  <td>${esc(g.reb ?? "")}</td>
+                  <td>${esc(g.ast ?? "")}</td>
+                  <td>${esc(g.fg3m ?? "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    // auto open first team
+    const firstTeam = teamKeys.find((t) => t !== "") || teamKeys[0];
+    if (firstTeam) renderPlayers(firstTeam);
+  }
+
+  async function loadAndRenderTeams() {
+    ensureTeamsUI();
+    const meta = $("ptTeamsMeta");
+    try {
+      if (meta) meta.textContent = "Loading DB…";
+      const db = await apiGet("/api/db/export");
+      const idx = buildTeamsIndex(db);
+      globalThis.__PT_TEAMS_INDEX__ = idx;
+      renderTeams(idx);
+      if (window.ptToast) window.ptToast("Teams ready ✅", "ok");
+    } catch (e) {
+      if (meta) meta.textContent = "Failed to load teams";
+      const box = $("errorBox");
+      if (box) { box.textContent = e.message || String(e); box.style.display = "block"; }
+      if (window.ptToast) window.ptToast("Teams load failed", "bad");
+    }
+  }
+
+  function wireTeamsControls() {
+    const btn = $("ptTeamsReload");
+    const search = $("ptTeamsSearch");
+    const sort = $("ptTeamsSort");
+
+    if (btn && !btn.__ptHook) {
+      btn.__ptHook = true;
+      btn.addEventListener("click", loadAndRenderTeams);
+    }
+
+    const rerender = () => {
+      const idx = globalThis.__PT_TEAMS_INDEX__;
+      if (idx) renderTeams(idx);
+    };
+
+    if (search && !search.__ptHook) { search.__ptHook = true; search.addEventListener("input", rerender); }
+    if (sort && !sort.__ptHook) { sort.__ptHook = true; sort.addEventListener("change", rerender); }
+  }
+
+  function onHash() {
+    const isTeams = (location.hash || "").toLowerCase() === "#teams";
+    const sec = $("ptTeamsPage");
+    if (!sec) return;
+
+    if (isTeams) {
+      sec.style.display = "";
+      // load once when first opened
+      if (!globalThis.__PT_TEAMS_INDEX__) loadAndRenderTeams().then(wireTeamsControls);
+      else { renderTeams(globalThis.__PT_TEAMS_INDEX__); wireTeamsControls(); }
+    } else {
+      sec.style.display = "none";
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      onHash();
+      window.addEventListener("hashchange", onHash);
+    });
+  } else {
+    onHash();
+    window.addEventListener("hashchange", onHash);
+  }
+})();
+
