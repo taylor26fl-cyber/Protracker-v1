@@ -4990,3 +4990,79 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Teams router (show Teams section when #teams, hide others)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_TEAMS_ROUTER__) return;
+  globalThis.__PT_TEAMS_ROUTER__ = true;
+
+  const hideIds = ["quickLinks", "leaders", "edges", "sgoProps", "status", "ptArchivePanel"];
+
+  function nodeForId(id) {
+    const n = document.getElementById(id);
+    if (!n) return null;
+    return n.closest("section") || n;
+  }
+
+  function setDisplay(id, show) {
+    const n = nodeForId(id);
+    if (n) n.style.display = show ? "" : "none";
+  }
+
+  function setPageTitle(text) {
+    // Works with your title block (ptPageTitle)
+    const t = document.getElementById("ptPageTitle");
+    if (t && t.children && t.children[0]) t.children[0].textContent = text;
+    document.title = `ProTracker v1 • ${text}`;
+  }
+
+  function route() {
+    const hash = (location.hash || "").toLowerCase();
+    const isTeams = hash === "#teams";
+
+    // Always ensure Teams section exists visually
+    const teams = document.getElementById("ptTeamsPage");
+    if (teams) teams.style.display = isTeams ? "" : "none";
+
+    if (isTeams) {
+      // Hide other pages
+      hideIds.forEach((id) => setDisplay(id, false));
+
+      // Hide helper bars that belong to other pages
+      const edgesTabs = document.getElementById("edgesTabs");
+      if (edgesTabs) edgesTabs.style.display = "none";
+      const sgoBar = document.getElementById("sgoImportBar");
+      if (sgoBar) sgoBar.style.display = "none";
+
+      setPageTitle("Teams");
+    } else {
+      // When leaving teams, do NOT force-show everything (your nav block controls that)
+      // Just restore title based on hash if possible.
+      const key = hash.replace("#", "").trim();
+      const map = {
+        dashboard: "Dashboard",
+        props: "Props",
+        edges: "Edges",
+        leaders: "Leaders",
+        status: "Status",
+        archive: "Archive"
+      };
+      setPageTitle(map[key] || "Dashboard");
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      route();
+      window.addEventListener("hashchange", route);
+    });
+  } else {
+    route();
+    window.addEventListener("hashchange", route);
+  }
+})();
+
