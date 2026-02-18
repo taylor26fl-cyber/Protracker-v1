@@ -2714,3 +2714,156 @@ function wireUI() {
   };
 })();
 
+// ===========================
+// NEXT BLOCK: Pretty Quick Links UI (buttons + copy)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_PRETTY_QUICKLINKS__) return;
+  globalThis.__PT_PRETTY_QUICKLINKS__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fallback for older browsers
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch {}
+      document.body.removeChild(ta);
+      return true;
+    }
+  }
+
+  function pill(label, href, kind) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.style.display = "flex";
+    a.style.justifyContent = "space-between";
+    a.style.alignItems = "center";
+    a.style.gap = "10px";
+    a.style.padding = "10px 12px";
+    a.style.borderRadius = "14px";
+    a.style.textDecoration = "none";
+    a.style.border = "1px solid rgba(226,232,240,.95)";
+    a.style.background = "rgba(255,255,255,.85)";
+    a.style.boxShadow = "0 10px 20px rgba(15,23,42,.05)";
+    a.style.color = "#0f172a";
+
+    const left = document.createElement("div");
+    left.innerHTML = `<div style="font-weight:800">${esc(label)}</div>
+                      <div class="muted" style="font-size:12px;word-break:break-all">${esc(href)}</div>`;
+
+    const right = document.createElement("button");
+    right.type = "button";
+    right.textContent = "Copy";
+    right.style.whiteSpace = "nowrap";
+    right.style.padding = "8px 10px";
+    right.style.fontSize = "14px";
+
+    // subtle color tag
+    const tag = document.createElement("span");
+    tag.style.display = "inline-block";
+    tag.style.width = "10px";
+    tag.style.height = "10px";
+    tag.style.borderRadius = "999px";
+    tag.style.marginRight = "8px";
+    tag.style.flex = "0 0 auto";
+
+    const colors = {
+      indigo: "linear-gradient(135deg,#4f46e5,#06b6d4)",
+      green: "linear-gradient(135deg,#10b981,#06b6d4)",
+      amber: "linear-gradient(135deg,#f59e0b,#ef4444)",
+      pink:  "linear-gradient(135deg,#ec4899,#8b5cf6)"
+    };
+    tag.style.background = colors[kind] || colors.indigo;
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = "10px";
+
+    const leftWrap = document.createElement("div");
+    leftWrap.style.display = "flex";
+    leftWrap.style.alignItems = "flex-start";
+    leftWrap.style.gap = "10px";
+    leftWrap.appendChild(tag);
+    leftWrap.appendChild(left);
+
+    row.appendChild(leftWrap);
+    row.appendChild(right);
+    a.appendChild(row);
+
+    right.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await copyText(href);
+      right.textContent = "Copied!";
+      setTimeout(() => (right.textContent = "Copy"), 800);
+    });
+
+    return a;
+  }
+
+  // Override renderQuickLinks
+  window.renderQuickLinks = function prettyQuickLinks(data) {
+    const wrap = $("quickLinks");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const top = document.createElement("div");
+    top.className = "muted";
+    top.textContent = `todayET: ${data.todayET} • activeDate: ${data.activeDate}`;
+    wrap.appendChild(top);
+
+    const links = data.links || {};
+    const entries = Object.entries(links);
+
+    if (!entries.length) {
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(data, null, 2);
+      wrap.appendChild(pre);
+      return;
+    }
+
+    const grid = document.createElement("div");
+    grid.style.display = "grid";
+    grid.style.gridTemplateColumns = "repeat(auto-fit, minmax(260px, 1fr))";
+    grid.style.gap = "10px";
+    grid.style.marginTop = "10px";
+
+    const kindFor = (k) => {
+      if (k.includes("health") || k.includes("routes")) return "indigo";
+      if (k.includes("leaders") || k.includes("warm")) return "green";
+      if (k.includes("edges")) return "pink";
+      return "amber";
+    };
+
+    entries.forEach(([k, href]) => {
+      grid.appendChild(pill(k, String(href), kindFor(k)));
+    });
+
+    wrap.appendChild(grid);
+  };
+})();
+
