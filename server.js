@@ -2410,3 +2410,70 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
   });
 })();
 
+// ===========================
+// DEBUG BLOCK: Probe SGO endpoints to find JSON (no captcha)
+// GET /api/dev/sgo/probe?date=YYYY-MM-DD
+// Append-only.
+// ===========================
+(function () {
+  if (globalThis.__PT_SGO_PROBE__) return;
+  globalThis.__PT_SGO_PROBE__ = true;
+
+  const appRef = (typeof app !== "undefined" && app) ? app : (globalThis.app || null);
+  if (!appRef) return;
+
+  const doFetch = (typeof fetch === "function") ? fetch : null;
+  if (!doFetch) return;
+
+  function isYMD(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+
+  appRef.get("/api/dev/sgo/probe", async (req, res) => {
+    try {
+      const date = String(req.query.date || "").trim();
+      if (!isYMD(date)) return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD." });
+
+      const apiKey = process.env.SGO_API_KEY;
+      if (!apiKey) return res.status(400).json({ ok: false, error: "Missing SGO_API_KEY." });
+
+      const candidates = [
+        // host variations + path variations
+        (d) => `https://api.sportsgameodds.com/api/v1/nba/props?date=${d}&limit=5`,
+        (d) => `https://api.sportsgameodds.com/v1/nba/props?date=${d}&limit=5`,
+        (d) => `https://api.sportsgameodds.com/v1/odds/props?date=${d}&limit=5`,
+        (d) => `https://api.sportsgameodds.com/api/v1/odds/props?date=${d}&limit=5`,
+        (d) => `https://sportsgameodds.com/api/v1/nba/props?date=${d}&limit=5`,
+        (d) => `https://sportsgameodds.com/api/v1/odds/props?date=${d}&limit=5`
+      ];
+
+      const results = [];
+      for (const makeUrl of candidates) {
+        const url = makeUrl(encodeURIComponent(date));
+        let status = null, ct = null, preview = null, looksJson = false, hasCaptcha = false;
+
+        try {
+          const r = await doFetch(url, {
+            method: "GET",
+            headers: { "Accept": "application/json", "x-api-key": apiKey }
+          });
+          status = r.status;
+          ct = (r.headers.get("content-type") || "").toLowerCase();
+          const text = await r.text();
+          preview = text.slice(0, 160);
+          looksJson = ct.includes("application/json") || preview.trim().startsWith("{") || preview.trim().startsWith("[");
+          hasCaptcha = preview.includes("sgcaptcha") || text.includes("/.well-known/sgcaptcha");
+        } catch (e) {
+          preview = `fetch error: ${e.message || String(e)}`;
+        }
+
+        results.push({ url, status, contentType: ct, looksJson, hasCaptcha, preview });
+      }
+
+      res.json({ ok: true, date, results });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  console.log("[sgo-probe] route registered: GET /api/dev/sgo/probe");
+})();
+
