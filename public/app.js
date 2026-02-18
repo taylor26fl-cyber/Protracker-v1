@@ -3481,3 +3481,227 @@ function wireUI() {
   };
 })();
 
+// ===========================
+// NEXT BLOCK: Archive UI (Archive date + View archive) using existing endpoints
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_ARCHIVE_UI__) return;
+  globalThis.__PT_ARCHIVE_UI__ = true;
+
+  const el = (id) => document.getElementById(id);
+
+  async function apiGet(url) {
+    const res = await fetch(url, { headers: { "Accept": "application/json" } });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  async function apiPost(url, bodyObj) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(bodyObj || {})
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  function showError(msg) {
+    const box = el("errorBox");
+    if (!box) return;
+    box.textContent = msg;
+    box.style.display = "block";
+  }
+
+  function clearError() {
+    const box = el("errorBox");
+    if (!box) return;
+    box.textContent = "";
+    box.style.display = "none";
+  }
+
+  function setMetaLine(msg) {
+    const m = el("metaLine");
+    if (m) m.textContent = msg || "";
+  }
+
+  function ensureArchiveUI() {
+    // Mount above Edges (or above SGO if Edges not present)
+    const edges = el("edges");
+    const sgo = el("sgoProps");
+    const anchor = edges || sgo;
+    if (!anchor) return;
+    if (el("ptArchivePanel")) return;
+
+    const panel = document.createElement("section");
+    panel.id = "ptArchivePanel";
+    panel.style.borderRadius = "18px";
+
+    const head = document.createElement("div");
+    head.style.display = "flex";
+    head.style.justifyContent = "space-between";
+    head.style.alignItems = "center";
+    head.style.gap = "10px";
+    head.style.marginBottom = "10px";
+
+    const title = document.createElement("div");
+    title.style.fontWeight = "900";
+    title.style.fontSize = "15px";
+    title.textContent = "Archive Tools";
+
+    const note = document.createElement("div");
+    note.className = "muted";
+    note.textContent = "Snapshot props for a date (use Backup/Restore on free Render).";
+
+    head.appendChild(title);
+    head.appendChild(note);
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.flexWrap = "wrap";
+    row.style.gap = "10px";
+    row.style.alignItems = "center";
+
+    const date = document.createElement("input");
+    date.type = "date";
+    date.id = "archiveDateInput";
+    date.style.maxWidth = "220px";
+    date.value = el("dateInput")?.value || "";
+
+    const btnArchive = document.createElement("button");
+    btnArchive.type = "button";
+    btnArchive.id = "archiveBtn";
+    btnArchive.textContent = "Archive This Date";
+
+    const btnView = document.createElement("button");
+    btnView.type = "button";
+    btnView.id = "archiveViewBtn";
+    btnView.textContent = "View Archive";
+
+    const btnLineMoves = document.createElement("button");
+    btnLineMoves.type = "button";
+    btnLineMoves.id = "lineMovesBtn";
+    btnLineMoves.textContent = "Line Moves (Compare)";
+
+    row.appendChild(date);
+    row.appendChild(btnArchive);
+    row.appendChild(btnView);
+    row.appendChild(btnLineMoves);
+
+    const status = document.createElement("div");
+    status.id = "archiveStatus";
+    status.className = "muted";
+    status.style.marginTop = "10px";
+    status.textContent = "Ready.";
+
+    const out = document.createElement("div");
+    out.id = "archiveOutput";
+    out.style.marginTop = "10px";
+
+    panel.appendChild(head);
+    panel.appendChild(row);
+    panel.appendChild(status);
+    panel.appendChild(out);
+
+    anchor.parentNode.insertBefore(panel, anchor);
+
+    function renderJSON(obj) {
+      out.innerHTML = "";
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(obj, null, 2);
+      out.appendChild(pre);
+    }
+
+    btnArchive.addEventListener("click", async () => {
+      clearError();
+      const d = date.value || el("dateInput")?.value || "";
+      if (!d) return showError("Pick a date to archive.");
+
+      try {
+        status.textContent = "Archiving…";
+        setMetaLine("Archiving date…");
+
+        const res = await apiPost("/api/props/archive-date", { date: d });
+        status.textContent = `Archived ✅ date: ${res.date || d}`;
+        renderJSON(res);
+
+        // refresh other panels if available
+        if (typeof window.refreshAll === "function") await window.refreshAll();
+      } catch (e) {
+        status.textContent = "Archive failed";
+        setMetaLine("Archive failed");
+        showError(e.message || String(e));
+      }
+    });
+
+    btnView.addEventListener("click", async () => {
+      clearError();
+      const d = date.value || el("dateInput")?.value || "";
+      if (!d) return showError("Pick a date to view.");
+
+      try {
+        status.textContent = "Loading archive…";
+        setMetaLine("Loading archive…");
+
+        const res = await apiGet(`/api/props/archive?date=${encodeURIComponent(d)}`);
+        status.textContent = `Archive loaded ✅ date: ${res.date || d}`;
+        renderJSON(res);
+        setMetaLine("Archive loaded");
+      } catch (e) {
+        status.textContent = "View failed";
+        setMetaLine("View failed");
+        showError(e.message || String(e));
+      }
+    });
+
+    btnLineMoves.addEventListener("click", async () => {
+      clearError();
+      const d = date.value || el("dateInput")?.value || "";
+      if (!d) return showError("Pick a date first.");
+
+      try {
+        status.textContent = "Loading line moves…";
+        setMetaLine("Loading line moves…");
+
+        const res = await apiGet(`/api/props/line-moves?date=${encodeURIComponent(d)}&source=all&limit=50`);
+        status.textContent = `Line moves ✅ date: ${res.date || d} • count: ${res.count ?? "?"}`;
+        renderJSON(res);
+        setMetaLine("Line moves loaded");
+      } catch (e) {
+        status.textContent = "Line moves failed";
+        setMetaLine("Line moves failed");
+        showError(e.message || String(e));
+      }
+    });
+
+    // Keep archive date synced to main date picker
+    const mainDate = el("dateInput");
+    if (mainDate) {
+      mainDate.addEventListener("change", () => {
+        if (!date.value) date.value = mainDate.value;
+      });
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ensureArchiveUI);
+  } else {
+    ensureArchiveUI();
+  }
+})();
+
