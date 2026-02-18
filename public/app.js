@@ -2131,3 +2131,289 @@ function wireUI() {
   };
 })();
 
+// ===========================
+// NEXT BLOCK: UI button to import SGO props from SportsGameOdds into DB
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+
+  const el = (id) => document.getElementById(id);
+
+  async function apiPost(url, bodyObj) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(bodyObj || {})
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  function ensureImportUI() {
+    const host = document.getElementById("sgoProps");
+    if (!host) return;
+
+    // Add a small control bar above the SGO props output
+    const bar = document.createElement("div");
+    bar.style.display = "flex";
+    bar.style.flexWrap = "wrap";
+    bar.style.gap = "8px";
+    bar.style.margin = "10px 0";
+
+    const btn = document.createElement("button");
+    btn.textContent = "Import SGO Props (API)";
+    btn.id = "importSgoBtn";
+
+    const book = document.createElement("input");
+    book.placeholder = "bookmakerID (optional) e.g. draftkings,fanduel";
+    book.id = "bookmakerInput";
+    book.style.flex = "1";
+    book.style.minWidth = "200px";
+
+    bar.appendChild(btn);
+    bar.appendChild(book);
+
+    // Insert before the SGO props pre/table
+    host.parentNode.insertBefore(bar, host);
+
+    btn.addEventListener("click", async () => {
+      const date = el("dateInput")?.value || "";
+      const bookmakerID = (document.getElementById("bookmakerInput")?.value || "").trim();
+
+      // show basic status in metaLine
+      const meta = el("metaLine");
+      if (meta) meta.textContent = "Importing SGO props...";
+
+      try {
+        const q = new URLSearchParams({ date, limit: "10" });
+        const data = await apiPost(`/api/import/sgo-props?${q.toString()}`, {
+          bookmakerID: bookmakerID || ""
+        });
+
+        if (meta) meta.textContent = `Imported SGO props: ${data.imported} (date ${data.date})`;
+        // trigger a normal refresh if your app has refreshAll()
+        if (typeof window.refreshAll === "function") await window.refreshAll();
+        else location.reload();
+      } catch (e) {
+        const box = el("errorBox");
+        if (box) {
+          box.textContent = e.message || String(e);
+          box.style.display = "block";
+        }
+        if (meta) meta.textContent = "Import failed";
+      }
+    });
+  }
+
+  // Run after DOM is ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ensureImportUI);
+  } else {
+    ensureImportUI();
+  }
+})();
+
+// ===========================
+// NEXT BLOCK: SGO Props -> Table + Search + Stat Filter (mobile-friendly)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_SGO_TABLE_UI__) return;
+  globalThis.__PT_SGO_TABLE_UI__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function normalizeStatLabel(statType) {
+    const s = String(statType || "").toLowerCase();
+    if (s === "points" || s === "pts") return "points";
+    if (s === "rebounds" || s === "reb") return "rebounds";
+    if (s === "assists" || s === "ast") return "assists";
+    if (s === "3pm" || s === "threes" || s === "threes_made" || s === "3pt" || s === "fg3m") return "3pm";
+    return statType || "unknown";
+  }
+
+  function ensureSgoControls() {
+    // Add controls ABOVE the SGO props output area
+    const host = $("sgoProps");
+    if (!host) return;
+
+    if ($("sgoSearchInput")) return; // already mounted
+
+    const bar = document.createElement("div");
+    bar.style.display = "flex";
+    bar.style.flexWrap = "wrap";
+    bar.style.gap = "10px";
+    bar.style.alignItems = "center";
+    bar.style.margin = "10px 0";
+
+    const search = document.createElement("input");
+    search.id = "sgoSearchInput";
+    search.placeholder = "Search player (e.g. Tatum)";
+    search.style.flex = "1";
+    search.style.minWidth = "180px";
+
+    const stat = document.createElement("select");
+    stat.id = "sgoStatSelect";
+    stat.style.minWidth = "160px";
+    stat.innerHTML = `
+      <option value="all">All stats</option>
+      <option value="points">Points</option>
+      <option value="rebounds">Rebounds</option>
+      <option value="assists">Assists</option>
+      <option value="3pm">3PM</option>
+    `;
+
+    const sort = document.createElement("select");
+    sort.id = "sgoSortSelect";
+    sort.style.minWidth = "160px";
+    sort.innerHTML = `
+      <option value="name">Sort: Player A→Z</option>
+      <option value="stat">Sort: Stat</option>
+      <option value="lineDesc">Sort: Line ↓</option>
+      <option value="lineAsc">Sort: Line ↑</option>
+    `;
+
+    bar.appendChild(search);
+    bar.appendChild(stat);
+    bar.appendChild(sort);
+
+    host.parentNode.insertBefore(bar, host);
+
+    const rerender = () => {
+      // If we cached the last SGO payload, re-render from it
+      if (globalThis.__PT_LAST_SGO_PROPS__) {
+        window.renderSgoProps(globalThis.__PT_LAST_SGO_PROPS__);
+      }
+    };
+
+    search.addEventListener("input", rerender);
+    stat.addEventListener("change", rerender);
+    sort.addEventListener("change", rerender);
+  }
+
+  function makeTable(rows) {
+    const wrap = document.createElement("div");
+    wrap.style.overflowX = "auto";
+
+    const t = document.createElement("table");
+    t.innerHTML = `
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Stat</th>
+          <th>Line</th>
+          <th>Side</th>
+          <th>Team</th>
+          <th>Book</th>
+        </tr>
+      </thead>
+    `;
+
+    const tb = document.createElement("tbody");
+
+    rows.forEach((p) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="font-weight:700;">${esc(p.playerName || p.playerId || "Unknown")}</td>
+        <td>${esc(normalizeStatLabel(p.statType))}</td>
+        <td>${esc(p.line ?? "")}</td>
+        <td>${esc((p.side || "").toLowerCase())}</td>
+        <td>${esc(p.team || "")}</td>
+        <td>${esc(p.source || p.book || "")}</td>
+      `;
+      tb.appendChild(tr);
+    });
+
+    t.appendChild(tb);
+    wrap.appendChild(t);
+    return wrap;
+  }
+
+  function applyFilters(props) {
+    const q = ($("sgoSearchInput")?.value || "").trim().toLowerCase();
+    const statChoice = ($("sgoStatSelect")?.value || "all").toLowerCase();
+    const sortChoice = ($("sgoSortSelect")?.value || "name");
+
+    let out = Array.isArray(props) ? props.slice() : [];
+
+    if (q) {
+      out = out.filter((p) => String(p.playerName || p.playerId || "").toLowerCase().includes(q));
+    }
+
+    if (statChoice !== "all") {
+      out = out.filter((p) => normalizeStatLabel(p.statType).toLowerCase() === statChoice);
+    }
+
+    // Sorting
+    if (sortChoice === "name") {
+      out.sort((a, b) => String(a.playerName || "").localeCompare(String(b.playerName || "")));
+    } else if (sortChoice === "stat") {
+      out.sort((a, b) => String(normalizeStatLabel(a.statType)).localeCompare(String(normalizeStatLabel(b.statType))));
+    } else if (sortChoice === "lineDesc") {
+      out.sort((a, b) => Number(b.line ?? -Infinity) - Number(a.line ?? -Infinity));
+    } else if (sortChoice === "lineAsc") {
+      out.sort((a, b) => Number(a.line ?? Infinity) - Number(b.line ?? Infinity));
+    }
+
+    return out;
+  }
+
+  // Override renderSgoProps to show table
+  window.renderSgoProps = function renderSgoPropsPretty(data) {
+    ensureSgoControls();
+
+    const wrap = $("sgoProps");
+    if (!wrap) return;
+
+    wrap.innerHTML = "";
+
+    // Keep last payload for re-filtering without re-fetching
+    globalThis.__PT_LAST_SGO_PROPS__ = data;
+
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.textContent = `date: ${data.date} • count: ${data.count}`;
+    wrap.appendChild(meta);
+
+    const props = Array.isArray(data.props) ? data.props : [];
+    const filtered = applyFilters(props);
+
+    const meta2 = document.createElement("div");
+    meta2.className = "muted";
+    meta2.style.marginTop = "6px";
+    meta2.textContent = `showing: ${filtered.length} / ${props.length}`;
+    wrap.appendChild(meta2);
+
+    if (!filtered.length) {
+      const pre = document.createElement("pre");
+      pre.textContent = "No matching props. Try clearing search/filter.";
+      wrap.appendChild(pre);
+      return;
+    }
+
+    wrap.appendChild(makeTable(filtered));
+  };
+
+  // Mount controls on load
+  window.addEventListener("load", ensureSgoControls);
+})();
+
