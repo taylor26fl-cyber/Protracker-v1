@@ -2268,3 +2268,145 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
   });
 })();
 
+// ===========================
+// PATCH BLOCK: Upgrade SGO import v2 to retry on HTTP 202
+// Adds /api/import/sgo-props-v2b (so no duplicates)
+// POST /api/import/sgo-props-v2b?date=YYYY-MM-DD&limit=50
+// Append-only.
+// ===========================
+(function () {
+  if (globalThis.__PT_SGO_IMPORT_V2B__) return;
+  globalThis.__PT_SGO_IMPORT_V2B__ = true;
+
+  const appRef = (typeof app !== "undefined" && app) ? app : (globalThis.app || null);
+  if (!appRef) return;
+
+  const doFetch = (typeof fetch === "function") ? fetch : null;
+  if (!doFetch) return;
+
+  function isYMD(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+  function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  function sgoUrl(date, limit) {
+    const base = (process.env.SGO_BASE_URL || "https://sportsgameodds.com").replace(/\/+$/, "");
+    const path = (process.env.SGO_PROPS_PATH || "/api/v1/nba/props").replace(/^\/?/, "/");
+    const qs = `date=${encodeURIComponent(date)}&limit=${encodeURIComponent(limit)}`;
+    return `${base}${path}?${qs}`;
+  }
+
+  function normalizeProp(p, date) {
+    const playerName = p.playerName || p.player || p.name || null;
+    const playerId = p.playerId || p.player_id || p.id || null;
+    const team = p.team || p.teamAbbr || p.team_abbr || null;
+
+    const rawType = (p.statType || p.market || p.propType || p.type || "").toString().toLowerCase();
+    let statType = rawType;
+    if (rawType.includes("point")) statType = "points";
+    else if (rawType.includes("reb")) statType = "rebounds";
+    else if (rawType.includes("assist")) statType = "assists";
+    else if (rawType.includes("3") || rawType.includes("three")) statType = "3pm";
+
+    const line = Number(p.line ?? p.value ?? p.propLine ?? p.points ?? p.number);
+    if (!playerName || !Number.isFinite(line)) return null;
+
+    return { date, playerId: playerId ? String(playerId) : "", playerName: String(playerName), team: team ? String(team) : "", statType, line };
+  }
+
+  function extractItems(json) {
+    return (
+      (json && Array.isArray(json.props) && json.props) ||
+      (json && Array.isArray(json.data) && json.data) ||
+      (json && Array.isArray(json.results) && json.results) ||
+      (json && Array.isArray(json.events) && json.events) ||
+      (Array.isArray(json) ? json : [])
+    );
+  }
+
+  async function fetchWithRetry(url, apiKey) {
+    // retry schedule: ~0.6s, 1s, 1.6s, 2.6s, 4.2s (total ~10s)
+    const waits = [600, 1000, 1600, 2600, 4200];
+
+    for (let attempt = 0; attempt <= waits.length; attempt++) {
+      const r = await doFetch(url, {
+        method: "GET",
+        headers: { "Accept": "application/json", "x-api-key": apiKey }
+      });
+
+      const text = await r.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch {}
+
+      // If 202, wait and retry
+      if (r.status === 202 && attempt < waits.length) {
+        await sleep(waits[attempt]);
+        continue;
+      }
+
+      return { r, text, json };
+    }
+
+    // should never reach
+    return null;
+  }
+
+  appRef.post("/api/import/sgo-props-v2b", async (req, res) => {
+    try {
+      const date = String(req.query.date || "").trim();
+      const limit = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
+      if (!isYMD(date)) return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD." });
+
+      const apiKey = process.env.SGO_API_KEY;
+      if (!apiKey) return res.status(400).json({ ok: false, error: "Missing SGO_API_KEY." });
+
+      const url = sgoUrl(date, limit);
+      const out = await fetchWithRetry(url, apiKey);
+      const r = out.r;
+
+      if (!r.ok && r.status !== 202) {
+        return res.status(502).json({
+          ok: false,
+          error: "SGO upstream error",
+          upstream: { url, status: r.status, statusText: r.statusText, preview: (out.text || "").slice(0, 200) }
+        });
+      }
+
+      // If still 202 after retries
+      if (r.status === 202) {
+        return res.status(202).json({
+          ok: false,
+          error: "SGO is still processing this request. Try again in 10–30 seconds.",
+          upstream: { url, status: r.status, statusText: r.statusText, preview: (out.text || "").slice(0, 200) }
+        });
+      }
+
+      const items = extractItems(out.json);
+      const normalized = [];
+      for (const it of items) {
+        const n = normalizeProp(it, date);
+        if (n) normalized.push(n);
+      }
+
+      const db = await readDB();
+      if (!Array.isArray(db.sgoPropLines)) db.sgoPropLines = [];
+
+      const before = db.sgoPropLines.length;
+      db.sgoPropLines = db.sgoPropLines.filter((p) => p && p.date !== date);
+      const replaced = before - db.sgoPropLines.length;
+
+      db.sgoPropLines.push(...normalized);
+      await writeDB(db);
+
+      return res.json({
+        ok: true,
+        date,
+        upstream: { url, status: r.status },
+        received: items.length,
+        imported: normalized.length,
+        replaced
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+})();
+
