@@ -2687,3 +2687,83 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
   });
 })();
 
+// ===========================
+// DEBUG BLOCK: Inspect SGO event.players structure
+// GET /api/dev/sgo/events-debug2?date=YYYY-MM-DD&limit=1
+// Append-only.
+// ===========================
+(function () {
+  if (globalThis.__PT_SGO_EVENTS_DEBUG2__) return;
+  globalThis.__PT_SGO_EVENTS_DEBUG2__ = true;
+
+  const appRef = (typeof app !== "undefined" && app) ? app : (globalThis.app || null);
+  if (!appRef) return;
+
+  const doFetch = (typeof fetch === "function") ? fetch : null;
+  if (!doFetch) return;
+
+  function isYMD(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+
+  function buildEventsUrl(limit) {
+    const qs = new URLSearchParams({ leagueID: "NBA", oddsAvailable: "true", limit: String(limit || 1) });
+    return `https://api.sportsgameodds.com/v2/events?${qs.toString()}`;
+  }
+
+  appRef.get("/api/dev/sgo/events-debug2", async (req, res) => {
+    try {
+      const date = String(req.query.date || "").trim();
+      const limit = Math.max(1, Math.min(3, Number(req.query.limit || 1)));
+      if (!isYMD(date)) return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD." });
+
+      const apiKey = process.env.SGO_API_KEY;
+      if (!apiKey) return res.status(400).json({ ok: false, error: "Missing SGO_API_KEY." });
+
+      const url = buildEventsUrl(limit);
+
+      const r = await doFetch(url, {
+        method: "GET",
+        headers: { "Accept": "application/json", "X-Api-Key": apiKey }
+      });
+
+      const text = await r.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch {}
+
+      const events = (json && Array.isArray(json.data) && json.data) ? json.data : [];
+      const ev = events[0] || null;
+
+      const players = ev && Array.isArray(ev.players) ? ev.players : [];
+      const p0 = players[0] || null;
+
+      // Look for nested arrays inside first player that might contain props/markets/odds
+      let nestedArrays = [];
+      if (p0 && typeof p0 === "object") {
+        for (const k of Object.keys(p0)) {
+          if (Array.isArray(p0[k])) nestedArrays.push([k, p0[k].length]);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        upstream: { url, status: r.status, statusText: r.statusText },
+        notice: json && json.notice ? json.notice : null,
+        eventsFound: events.length,
+        sample: {
+          eventID: ev ? ev.eventID : null,
+          eventKeys: ev ? Object.keys(ev).slice(0, 30) : [],
+          oddsLen: ev && Array.isArray(ev.odds) ? ev.odds.length : 0,
+          playersLen: players.length,
+          playerKeys: p0 ? Object.keys(p0).slice(0, 40) : [],
+          playerNestedArrays: nestedArrays.slice(0, 20),
+          playerPreview: p0 ? p0 : null
+        },
+        textPreview: text.slice(0, 300)
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  console.log("[sgo-debug2] route registered: GET /api/dev/sgo/events-debug2");
+})();
+
