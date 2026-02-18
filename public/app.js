@@ -2417,3 +2417,140 @@ function wireUI() {
   window.addEventListener("load", ensureSgoControls);
 })();
 
+// ===========================
+// NEXT BLOCK: Import SGO Props button + status + auto-refresh
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_SGO_IMPORT_UI__) return;
+  globalThis.__PT_SGO_IMPORT_UI__ = true;
+
+  const el = (id) => document.getElementById(id);
+
+  async function apiPost(url, bodyObj) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(bodyObj || {})
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  function showError(msg) {
+    const box = el("errorBox");
+    if (!box) return;
+    box.textContent = msg;
+    box.style.display = "block";
+  }
+
+  function clearError() {
+    const box = el("errorBox");
+    if (!box) return;
+    box.textContent = "";
+    box.style.display = "none";
+  }
+
+  function ensureImportBar() {
+    const host = el("sgoProps");
+    if (!host) return;
+    if (el("sgoImportBtn")) return; // already mounted
+
+    const bar = document.createElement("div");
+    bar.id = "sgoImportBar";
+    bar.style.display = "flex";
+    bar.style.flexWrap = "wrap";
+    bar.style.gap = "10px";
+    bar.style.alignItems = "center";
+    bar.style.margin = "10px 0";
+
+    const btn = document.createElement("button");
+    btn.id = "sgoImportBtn";
+    btn.textContent = "Import SGO Props (API)";
+
+    const book = document.createElement("input");
+    book.id = "sgoBookmakers";
+    book.placeholder = "bookmakerID optional (draftkings,fanduel)";
+    book.style.flex = "1";
+    book.style.minWidth = "220px";
+
+    const limit = document.createElement("input");
+    limit.id = "sgoLimit";
+    limit.type = "number";
+    limit.min = "1";
+    limit.max = "50";
+    limit.value = "10";
+    limit.placeholder = "limit";
+    limit.style.maxWidth = "120px";
+
+    const status = document.createElement("div");
+    status.id = "sgoImportStatus";
+    status.className = "muted";
+    status.textContent = "Tip: Set SGO_API_KEY on Render + locally.";
+
+    bar.appendChild(btn);
+    bar.appendChild(book);
+    bar.appendChild(limit);
+    bar.appendChild(status);
+
+    host.parentNode.insertBefore(bar, host);
+
+    btn.addEventListener("click", async () => {
+      clearError();
+
+      const date = el("dateInput")?.value || "";
+      const bookmakerID = (el("sgoBookmakers")?.value || "").trim();
+      const lim = Number(el("sgoLimit")?.value || 10);
+
+      const meta = el("metaLine");
+      const st = el("sgoImportStatus");
+      if (st) st.textContent = "Importing…";
+      if (meta) meta.textContent = "Importing SGO props…";
+
+      try {
+        const q = new URLSearchParams({
+          date: date,
+          limit: String(Number.isFinite(lim) ? lim : 10)
+        });
+
+        const data = await apiPost(`/api/import/sgo-props?${q.toString()}`, {
+          bookmakerID: bookmakerID || ""
+        });
+
+        const imported = data.imported ?? data.count ?? "OK";
+        if (st) st.textContent = `Imported: ${imported} • date: ${data.date || date}`;
+        if (meta) meta.textContent = `SGO import OK • ${data.date || date}`;
+
+        // Refresh UI
+        if (typeof window.refreshAll === "function") {
+          await window.refreshAll();
+        } else if (typeof refreshAll === "function") {
+          await refreshAll();
+        } else {
+          location.reload();
+        }
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        showError(msg);
+        if (st) st.textContent = "Import failed (see error above)";
+        if (meta) meta.textContent = "Import failed";
+      }
+    });
+  }
+
+  // Mount once
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ensureImportBar);
+  } else {
+    ensureImportBar();
+  }
+})();
+
