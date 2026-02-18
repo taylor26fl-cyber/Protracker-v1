@@ -2477,3 +2477,213 @@ app.post("/api/dev/simulate-line-move", async (req, res) => {
   console.log("[sgo-probe] route registered: GET /api/dev/sgo/probe");
 })();
 
+// ===========================
+// PATCH BLOCK: SGO v3 import via api.sportsgameodds.com/v2/events (no captcha)
+// Adds:
+//   GET  /api/dev/sgo/events-debug?date=YYYY-MM-DD&limit=3
+//   POST /api/import/sgo-props-v3?date=YYYY-MM-DD&limit=200
+// Append-only.
+// ===========================
+(function () {
+  if (globalThis.__PT_SGO_V3__) return;
+  globalThis.__PT_SGO_V3__ = true;
+
+  const appRef = (typeof app !== "undefined" && app) ? app : (globalThis.app || null);
+  if (!appRef) return;
+
+  const doFetch = (typeof fetch === "function") ? fetch : null;
+  if (!doFetch) return;
+
+  function isYMD(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+
+  // Minimal ET date filter (best-effort) using UTC midnight boundaries.
+  // Good enough to group props by requested date.
+  function toDateKeyUTC(isoLike) {
+    const d = new Date(isoLike);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().slice(0, 10);
+  }
+
+  function pick(obj, keys) {
+    for (const k of keys) {
+      if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+    }
+    return undefined;
+  }
+
+  function buildEventsUrl(limit) {
+    // Per SGO docs/examples, use /v2/events with leagueID + oddsAvailable. 1
+    const base = "https://api.sportsgameodds.com";
+    const qs = new URLSearchParams({
+      leagueID: "NBA",
+      oddsAvailable: "true",
+      limit: String(limit || 10),
+    });
+    return `${base}/v2/events?${qs.toString()}`;
+  }
+
+  function extractEvents(json) {
+    return (
+      (json && Array.isArray(json.data) && json.data) ||
+      (json && Array.isArray(json.events) && json.events) ||
+      (Array.isArray(json) ? json : [])
+    );
+  }
+
+  function extractOddsFromEvent(ev) {
+    return (
+      (ev && Array.isArray(ev.odds) && ev.odds) ||
+      (ev && Array.isArray(ev.lines) && ev.lines) ||
+      (ev && Array.isArray(ev.markets) && ev.markets) ||
+      []
+    );
+  }
+
+  // Normalize odds → our sgoPropLines schema
+  function normalizeOddToProp(odd, dateKey) {
+    // We only keep entries that look like player props:
+    const playerName = pick(odd, ["playerName", "player", "player_name", "name"]);
+    const playerId = pick(odd, ["playerID", "playerId", "player_id"]);
+    const team = pick(odd, ["team", "teamAbbr", "team_abbr"]);
+    const lineRaw = pick(odd, ["line", "value", "propLine", "points", "number"]);
+    const statRaw = String(pick(odd, ["statType", "market", "oddID", "type", "propType"]) || "").toLowerCase();
+
+    const line = Number(lineRaw);
+    if (!playerName || !Number.isFinite(line)) return null;
+
+    // Stat type mapping (best-effort)
+    let statType = statRaw;
+    if (statRaw.includes("point")) statType = "points";
+    else if (statRaw.includes("reb")) statType = "rebounds";
+    else if (statRaw.includes("assist")) statType = "assists";
+    else if (statRaw.includes("3") || statRaw.includes("three")) statType = "3pm";
+
+    return {
+      date: dateKey,
+      playerId: playerId ? String(playerId) : "",
+      playerName: String(playerName),
+      statType,
+      line,
+      team: team ? String(team) : ""
+    };
+  }
+
+  // Debug: show us actual structure from /v2/events
+  appRef.get("/api/dev/sgo/events-debug", async (req, res) => {
+    try {
+      const date = String(req.query.date || "").trim();
+      const limit = Math.max(1, Math.min(10, Number(req.query.limit || 3)));
+
+      if (!isYMD(date)) return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD." });
+
+      const apiKey = process.env.SGO_API_KEY;
+      if (!apiKey) return res.status(400).json({ ok: false, error: "Missing SGO_API_KEY." });
+
+      const url = buildEventsUrl(limit);
+
+      const r = await doFetch(url, {
+        method: "GET",
+        headers: { "Accept": "application/json", "X-Api-Key": apiKey },
+      });
+
+      const text = await r.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch {}
+
+      const events = extractEvents(json);
+      const sampleEvent = events[0] || null;
+      const sampleOdds = sampleEvent ? extractOddsFromEvent(sampleEvent).slice(0, 3) : [];
+
+      return res.json({
+        ok: true,
+        upstream: { url, status: r.status, statusText: r.statusText },
+        shape: json && typeof json === "object" ? Object.keys(json).slice(0, 30) : typeof json,
+        eventsFound: events.length,
+        sample: {
+          eventKeys: sampleEvent ? Object.keys(sampleEvent).slice(0, 40) : [],
+          oddsFoundInFirstEvent: sampleEvent ? extractOddsFromEvent(sampleEvent).length : 0,
+          oddKeys: sampleOdds[0] ? Object.keys(sampleOdds[0]).slice(0, 40) : [],
+          oddsPreview: sampleOdds
+        },
+        textPreview: text.slice(0, 200)
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  // Import: pulls events, filters to requested dateKey (UTC key best-effort), extracts player props-ish odds
+  appRef.post("/api/import/sgo-props-v3", async (req, res) => {
+    try {
+      const date = String(req.query.date || "").trim();
+      const limit = Math.max(1, Math.min(500, Number(req.query.limit || 200)));
+
+      if (!isYMD(date)) return res.status(400).json({ ok: false, error: "Invalid date. Use YYYY-MM-DD." });
+
+      const apiKey = process.env.SGO_API_KEY;
+      if (!apiKey) return res.status(400).json({ ok: false, error: "Missing SGO_API_KEY." });
+
+      const url = buildEventsUrl(Math.max(10, Math.min(200, limit)));
+
+      const r = await doFetch(url, {
+        method: "GET",
+        headers: { "Accept": "application/json", "X-Api-Key": apiKey },
+      });
+
+      const text = await r.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch {}
+
+      if (!r.ok) {
+        return res.status(502).json({
+          ok: false,
+          error: "SGO upstream error",
+          upstream: { url, status: r.status, statusText: r.statusText, preview: text.slice(0, 200) }
+        });
+      }
+
+      const events = extractEvents(json);
+
+      // Filter events by date (best-effort):
+      // we try common start time fields; if missing, we keep it (so we don’t drop everything)
+      const chosen = [];
+      for (const ev of events) {
+        const start = pick(ev, ["startTime", "start_time", "commenceTime", "commence_time", "eventTime", "time"]);
+        const key = start ? toDateKeyUTC(start) : null;
+        if (!start || key === date) chosen.push(ev);
+      }
+
+      const props = [];
+      for (const ev of chosen) {
+        const odds = extractOddsFromEvent(ev);
+        for (const odd of odds) {
+          const p = normalizeOddToProp(odd, date);
+          if (p) props.push(p);
+        }
+      }
+
+      const db = await readDB();
+      if (!Array.isArray(db.sgoPropLines)) db.sgoPropLines = [];
+
+      const before = db.sgoPropLines.length;
+      db.sgoPropLines = db.sgoPropLines.filter((p) => p && p.date !== date);
+      const replaced = before - db.sgoPropLines.length;
+
+      db.sgoPropLines.push(...props);
+      await writeDB(db);
+
+      return res.json({
+        ok: true,
+        date,
+        upstream: { url, status: r.status },
+        eventsFound: events.length,
+        eventsUsed: chosen.length,
+        imported: props.length,
+        replaced
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+})();
+
