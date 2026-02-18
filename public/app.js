@@ -5469,3 +5469,299 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Teams page bettor metrics (Hit Rate vs Line for L5/L10)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_TEAMS_HITRATE__) return;
+  globalThis.__PT_TEAMS_HITRATE__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  function num(x) {
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function statKeyFromChoice(choice) {
+    const c = String(choice || "").toLowerCase();
+    if (c === "pts" || c === "points") return "pts";
+    if (c === "reb" || c === "rebounds") return "reb";
+    if (c === "ast" || c === "assists") return "ast";
+    if (c === "3pm" || c === "threes") return "fg3m";
+    return "pts";
+  }
+
+  function hitRate(games, statKey, line) {
+    const xs = (games || [])
+      .map((g) => num(g[statKey]))
+      .filter((v) => v !== null);
+
+    const n = xs.length;
+    if (!n) return { n: 0, overPct: null, underPct: null, pushes: 0 };
+
+    let over = 0, under = 0, push = 0;
+    for (const v of xs) {
+      if (v > line) over++;
+      else if (v < line) under++;
+      else push++;
+    }
+    return {
+      n,
+      overPct: (over / n) * 100,
+      underPct: (under / n) * 100,
+      pushes: push
+    };
+  }
+
+  function ensureControls() {
+    const sec = document.getElementById("ptTeamsPage");
+    if (!sec) return;
+
+    // Only add once
+    if (document.getElementById("ptHitControls")) return;
+
+    // Insert under the Teams header
+    const headerRow = sec.querySelector("div"); // first row
+    const controls = document.createElement("div");
+    controls.id = "ptHitControls";
+    controls.style.marginTop = "10px";
+    controls.style.display = "flex";
+    controls.style.gap = "10px";
+    controls.style.flexWrap = "wrap";
+    controls.style.alignItems = "center";
+
+    controls.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center; width:100%;">
+        <div style="border:1px solid rgba(226,232,240,.95); border-radius:16px; padding:10px; background:rgba(255,255,255,.85); display:flex; gap:10px; flex-wrap:wrap; align-items:center; width:100%;">
+          <div style="font-weight:950;">Hit Rate</div>
+
+          <select id="ptHitStat" style="max-width:140px;">
+            <option value="PTS">PTS</option>
+            <option value="REB">REB</option>
+            <option value="AST">AST</option>
+            <option value="3PM">3PM</option>
+          </select>
+
+          <input id="ptHitLine" inputmode="decimal" placeholder="Line (e.g. 22.5)" style="max-width:160px;" />
+
+          <select id="ptHitSort" style="max-width:240px;">
+            <option value="over5">Sort: Over% L5</option>
+            <option value="over10">Sort: Over% L10</option>
+            <option value="under5">Sort: Under% L5</option>
+            <option value="under10">Sort: Under% L10</option>
+            <option value="none">Sort: (keep current)</option>
+          </select>
+
+          <button id="ptHitApply" type="button">Apply</button>
+
+          <div class="muted" id="ptHitNote">Enter a line to compute Over/Under% for each player.</div>
+        </div>
+      </div>
+    `;
+
+    // Insert after the top bar in Teams section
+    sec.insertBefore(controls, sec.children[1] || null);
+  }
+
+  function upgradePlayersTable() {
+    const playersWrap = document.getElementById("ptTeamsPlayers");
+    if (!playersWrap) return;
+
+    // Add columns if a table exists
+    const table = playersWrap.querySelector("table");
+    if (!table) return;
+
+    const theadRow = table.querySelector("thead tr");
+    if (!theadRow) return;
+
+    // Prevent duplicate header columns
+    const already = [...theadRow.children].some((th) => th.textContent.includes("Over%"));
+    if (!already) {
+      const th1 = document.createElement("th"); th1.textContent = "Over% L5";
+      const th2 = document.createElement("th"); th2.textContent = "Over% L10";
+      const th3 = document.createElement("th"); th3.textContent = "Under% L5";
+      const th4 = document.createElement("th"); th4.textContent = "Under% L10";
+      theadRow.appendChild(th1);
+      theadRow.appendChild(th2);
+      theadRow.appendChild(th3);
+      theadRow.appendChild(th4);
+    }
+
+    // Add placeholder cells to each body row if missing
+    const rows = table.querySelectorAll("tbody tr");
+    rows.forEach((tr) => {
+      if (tr.children.length < theadRow.children.length) {
+        for (let i = tr.children.length; i < theadRow.children.length; i++) {
+          const td = document.createElement("td");
+          td.textContent = "";
+          tr.appendChild(td);
+        }
+      }
+    });
+  }
+
+  function applyHitRates() {
+    // This relies on the FULL teams block having current selected team players in the DOM table
+    const line = num(document.getElementById("ptHitLine")?.value);
+    const statChoice = document.getElementById("ptHitStat")?.value || "PTS";
+    const sortChoice = document.getElementById("ptHitSort")?.value || "over5";
+    const note = document.getElementById("ptHitNote");
+
+    if (line === null) {
+      if (note) note.textContent = "Enter a numeric line (example: 22.5).";
+      if (window.ptToast) window.ptToast("Enter a line first", "warn");
+      return;
+    }
+
+    const statKey = statKeyFromChoice(statChoice);
+
+    // We need access to the underlying players data.
+    // The FULL teams block stores teams index in globalThis.__PT_TEAMS_INDEX__.
+    const idx = globalThis.__PT_TEAMS_INDEX__;
+    if (!idx) {
+      if (note) note.textContent = "Teams data not loaded yet.";
+      return;
+    }
+
+    // Determine current selected team by reading meta (best effort)
+    // meta looks like: "team: BOS • players: 14"
+    const meta = document.getElementById("ptTeamsMeta")?.textContent || "";
+    let team = null;
+    const m = meta.match(/team:\s*([A-Za-z0-9_]+)/);
+    if (m) team = m[1];
+
+    // fallback: first team
+    if (!team) team = [...idx.keys()][0];
+
+    const playersMap = idx.get(team);
+    if (!playersMap) return;
+
+    const players = [...playersMap.values()].map((p) => {
+      const games = (p.games || []).slice();
+      const l5 = games.slice(0, 5);
+      const l10 = games.slice(0, 10);
+      const h5 = hitRate(l5, statKey, line);
+      const h10 = hitRate(l10, statKey, line);
+      return { p, h5, h10 };
+    });
+
+    // Sort players (optional)
+    const key = sortChoice;
+    if (key !== "none") {
+      players.sort((a, b) => {
+        const get = (obj) => {
+          if (key === "over5") return obj.h5.overPct ?? -Infinity;
+          if (key === "over10") return obj.h10.overPct ?? -Infinity;
+          if (key === "under5") return obj.h5.underPct ?? -Infinity;
+          if (key === "under10") return obj.h10.underPct ?? -Infinity;
+          return -Infinity;
+        };
+        return get(b) - get(a);
+      });
+    }
+
+    // Now update the visible players table to show hit rates in the extra columns.
+    const playersWrap = document.getElementById("ptTeamsPlayers");
+    const table = playersWrap?.querySelector("table");
+    const tbody = table?.querySelector("tbody");
+    const theadRow = table?.querySelector("thead tr");
+    if (!table || !tbody || !theadRow) return;
+
+    // Build a mapping from playerName -> rates
+    const map = new Map();
+    players.forEach(({ p, h5, h10 }) => {
+      map.set(String(p.playerName), { h5, h10 });
+    });
+
+    // Ensure columns exist
+    upgradePlayersTable();
+
+    // After upgrade, header count is fixed; find column indexes
+    const headers = [...theadRow.children].map((th) => th.textContent.trim());
+    const idxOver5 = headers.indexOf("Over% L5");
+    const idxOver10 = headers.indexOf("Over% L10");
+    const idxUnder5 = headers.indexOf("Under% L5");
+    const idxUnder10 = headers.indexOf("Under% L10");
+
+    // Update rows
+    [...tbody.querySelectorAll("tr")].forEach((tr) => {
+      const name = tr.children[0]?.textContent?.trim() || "";
+      const rates = map.get(name);
+      if (!rates) return;
+
+      const set = (col, val) => {
+        if (col < 0) return;
+        tr.children[col].textContent = val;
+      };
+
+      const over5 = rates.h5.overPct === null ? "" : `${Math.round(rates.h5.overPct)}% (${rates.h5.n})`;
+      const over10 = rates.h10.overPct === null ? "" : `${Math.round(rates.h10.overPct)}% (${rates.h10.n})`;
+      const under5 = rates.h5.underPct === null ? "" : `${Math.round(rates.h5.underPct)}% (${rates.h5.n})`;
+      const under10 = rates.h10.underPct === null ? "" : `${Math.round(rates.h10.underPct)}% (${rates.h10.n})`;
+
+      set(idxOver5, over5);
+      set(idxOver10, over10);
+      set(idxUnder5, under5);
+      set(idxUnder10, under10);
+    });
+
+    // Optional toast
+    if (note) note.textContent = `${statChoice} line ${line} applied for ${team}.`;
+    if (window.ptToast) window.ptToast(`Hit rates applied (${statChoice} ${line})`, "ok");
+  }
+
+  function wire() {
+    ensureControls();
+
+    const btn = document.getElementById("ptHitApply");
+    if (btn && !btn.__ptHook) {
+      btn.__ptHook = true;
+      btn.addEventListener("click", applyHitRates);
+    }
+
+    // Auto apply when line/stat changes (nice UX)
+    const line = document.getElementById("ptHitLine");
+    const stat = document.getElementById("ptHitStat");
+    if (line && !line.__ptHook) {
+      line.__ptHook = true;
+      line.addEventListener("change", applyHitRates);
+    }
+    if (stat && !stat.__ptHook) {
+      stat.__ptHook = true;
+      stat.addEventListener("change", applyHitRates);
+    }
+  }
+
+  function onTeamsOpen() {
+    // Only wire when Teams page is active
+    if ((location.hash || "").toLowerCase() === "#teams") {
+      wire();
+      // Try to add columns if table already exists
+      setTimeout(upgradePlayersTable, 250);
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      onTeamsOpen();
+      window.addEventListener("hashchange", onTeamsOpen);
+    });
+  } else {
+    onTeamsOpen();
+    window.addEventListener("hashchange", onTeamsOpen);
+  }
+})();
+
