@@ -89,3 +89,222 @@
   <script src="./app.js"></script>
 </body>
 </html>
+<!-- ===========================
+NEXT BLOCK: Colorful Light Theme (mobile-friendly)
+Append-only. Paste at bottom of public/index.html
+=========================== -->
+<style>
+  :root{
+    --bg:#f6f8ff;
+    --card:#ffffff;
+    --text:#0f172a;
+    --muted:#475569;
+    --line:#e2e8f0;
+
+    --primary:#4f46e5;   /* indigo */
+    --accent:#06b6d4;    /* cyan */
+    --good:#10b981;      /* green */
+    --warn:#f59e0b;      /* amber */
+    --bad:#ef4444;       /* red */
+  }
+
+  html,body{height:100%}
+  body{
+    margin:0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: radial-gradient(900px 500px at 20% 0%, rgba(79,70,229,.18), transparent 60%),
+                radial-gradient(900px 500px at 90% 10%, rgba(6,182,212,.18), transparent 60%),
+                var(--bg);
+    color:var(--text);
+  }
+
+  /* Make everything feel centered + roomy */
+  header, main{
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 14px;
+  }
+
+  /* Header glow bar */
+  header{
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    backdrop-filter: blur(10px);
+    background: rgba(246,248,255,.78);
+    border-bottom: 1px solid rgba(226,232,240,.8);
+  }
+
+  /* Title style (works even if your HTML uses h1) */
+  h1,h2,h3{margin:0 0 10px 0}
+  h1{
+    font-size: 20px;
+    letter-spacing: .2px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  h1::before{
+    content:"";
+    width:12px;height:12px;border-radius:50%;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    box-shadow: 0 0 0 6px rgba(79,70,229,.12);
+  }
+
+  /* Card sections */
+  section{
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 12px;
+    margin: 12px 0;
+    box-shadow: 0 10px 24px rgba(15,23,42,.06);
+  }
+
+  .muted{
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  /* Controls row (your existing inputs/buttons) */
+  .controls, #controls, .toolbar{
+    display:flex;
+    flex-wrap: wrap;
+    gap:10px;
+    align-items:center;
+  }
+
+  input, select{
+    width: 100%;
+    max-width: 240px;
+    padding: 10px 12px;
+    font-size: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    outline: none;
+    background: #fff;
+  }
+  input:focus, select:focus{
+    border-color: rgba(79,70,229,.55);
+    box-shadow: 0 0 0 4px rgba(79,70,229,.14);
+  }
+
+  button{
+    padding: 10px 12px;
+    font-size: 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(79,70,229,.25);
+    background: linear-gradient(135deg, rgba(79,70,229,.12), rgba(6,182,212,.10));
+    color: var(--text);
+    font-weight: 650;
+  }
+  button:active{transform: translateY(1px)}
+  button:hover{
+    border-color: rgba(79,70,229,.45);
+    box-shadow: 0 10px 18px rgba(79,70,229,.10);
+  }
+
+  /* Error box prettier */
+  #errorBox{
+    display:none;
+    background: rgba(239,68,68,.10);
+    border: 1px solid rgba(239,68,68,.30);
+    color: #7f1d1d;
+    padding: 10px 12px;
+    border-radius: 12px;
+    white-space: pre-wrap;
+    margin-top: 10px;
+  }
+
+  /* Table default styling (applies to leaders + edges tables) */
+  table{
+    width:100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    font-size: 14px;
+  }
+  th, td{
+    border-bottom: 1px solid var(--line);
+    padding: 8px;
+    text-align:left;
+    vertical-align: top;
+  }
+  thead th{
+    position: sticky;
+    top: 68px; /* below sticky header */
+    background: rgba(255,255,255,.92);
+    backdrop-filter: blur(8px);
+    z-index: 5;
+  }
+
+  /* Code/pre blocks nicer */
+  pre{
+    background: #0b1220;
+    color: #e5e7eb;
+    border-radius: 14px;
+    padding: 10px 12px;
+    overflow:auto;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  /* Make big sections readable on phone */
+  @media (max-width: 560px){
+    header, main{padding: 10px}
+    section{padding: 10px;border-radius: 14px}
+    input, select{max-width: 100%}
+    button{width: 100%}
+    thead th{top: 92px}
+  }
+</style>
+<script>
+  // Small helper: add a "controls" wrapper style automatically if you didn't have one
+  window.addEventListener("load", () => {
+    const date = document.getElementById("dateInput");
+    const minEdge = document.getElementById("minEdgeInput");
+    const games = document.getElementById("gamesInput");
+    const refresh = document.getElementById("refreshBtn");
+    const warm = document.getElementById("warmBtn");
+
+    // If these exist, put them in a nice toolbar area under header
+    if (date && (refresh || warm)) {
+      const bar = document.createElement("div");
+      bar.className = "controls";
+      bar.style.marginTop = "10px";
+
+      // Add labels (small)
+      function wrapL(label, node){
+        const w = document.createElement("div");
+        w.style.display = "flex";
+        w.style.flexDirection = "column";
+        w.style.gap = "6px";
+        const l = document.createElement("div");
+        l.className = "muted";
+        l.textContent = label;
+        w.appendChild(l);
+        w.appendChild(node);
+        return w;
+      }
+
+      const holder = document.createElement("section");
+      holder.style.marginTop = "10px";
+      holder.style.borderRadius = "18px";
+
+      const row = document.createElement("div");
+      row.className = "controls";
+
+      row.appendChild(wrapL("Date", date));
+      if (minEdge) row.appendChild(wrapL("Min Edge", minEdge));
+      if (games) row.appendChild(wrapL("Games N", games));
+
+      if (refresh) row.appendChild(refresh);
+      if (warm) row.appendChild(warm);
+
+      holder.appendChild(row);
+
+      // Put it inside header so it stays sticky
+      document.querySelector("header")?.appendChild(holder);
+    }
+  });
+</script>
+
