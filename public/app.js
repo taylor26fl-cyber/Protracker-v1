@@ -4203,3 +4203,790 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Dynamic Page Title + Toast Notifications (app feel)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_TOASTS_AND_TITLE__) return;
+  globalThis.__PT_TOASTS_AND_TITLE__ = true;
+
+  const pageTitles = {
+    dashboard: "Dashboard",
+    props: "Props",
+    edges: "Edges",
+    leaders: "Leaders",
+    status: "Status",
+    archive: "Archive"
+  };
+
+  function currentPage() {
+    const h = (location.hash || "").replace("#", "").trim().toLowerCase();
+    return pageTitles[h] ? h : "dashboard";
+  }
+
+  function ensureTitleEl() {
+    if (document.getElementById("ptPageTitle")) return;
+
+    const header = document.querySelector("header");
+    if (!header) return;
+
+    // Create a compact title line under the main h1 if possible
+    const title = document.createElement("div");
+    title.id = "ptPageTitle";
+    title.style.marginTop = "10px";
+    title.style.padding = "10px 12px";
+    title.style.borderRadius = "16px";
+    title.style.border = "1px solid rgba(226,232,240,.95)";
+    title.style.background = "linear-gradient(135deg, rgba(79,70,229,.10), rgba(6,182,212,.10))";
+    title.style.display = "flex";
+    title.style.justifyContent = "space-between";
+    title.style.alignItems = "center";
+    title.style.gap = "10px";
+
+    const left = document.createElement("div");
+    left.style.fontWeight = "950";
+    left.style.fontSize = "16px";
+    left.textContent = "Dashboard";
+
+    const right = document.createElement("div");
+    right.className = "muted";
+    right.style.fontWeight = "800";
+    right.textContent = "Ready";
+
+    title.appendChild(left);
+    title.appendChild(right);
+
+    header.appendChild(title);
+  }
+
+  function setTitleAndStatus() {
+    const key = currentPage();
+    const titleText = pageTitles[key] || "Dashboard";
+    const titleEl = document.getElementById("ptPageTitle");
+    if (titleEl) {
+      titleEl.children[0].textContent = titleText;
+    }
+    document.title = `ProTracker v1 • ${titleText}`;
+  }
+
+  // Toasts
+  function ensureToastHost() {
+    if (document.getElementById("ptToastHost")) return;
+    const host = document.createElement("div");
+    host.id = "ptToastHost";
+    host.style.position = "fixed";
+    host.style.left = "12px";
+    host.style.right = "12px";
+    host.style.bottom = "102px"; // above bottom nav
+    host.style.zIndex = "1000";
+    host.style.display = "flex";
+    host.style.flexDirection = "column";
+    host.style.gap = "10px";
+    host.style.pointerEvents = "none";
+    document.body.appendChild(host);
+  }
+
+  function toast(msg, kind) {
+    ensureToastHost();
+    const host = document.getElementById("ptToastHost");
+    if (!host) return;
+
+    const t = document.createElement("div");
+    t.style.pointerEvents = "auto";
+    t.style.padding = "10px 12px";
+    t.style.borderRadius = "16px";
+    t.style.border = "1px solid rgba(226,232,240,.95)";
+    t.style.background = "rgba(255,255,255,.92)";
+    t.style.boxShadow = "0 16px 40px rgba(15,23,42,.16)";
+    t.style.display = "flex";
+    t.style.justifyContent = "space-between";
+    t.style.alignItems = "center";
+    t.style.gap = "12px";
+
+    const left = document.createElement("div");
+    left.style.fontWeight = "850";
+    left.style.fontSize = "14px";
+    left.textContent = msg || "";
+
+    const dot = document.createElement("div");
+    dot.style.width = "10px";
+    dot.style.height = "10px";
+    dot.style.borderRadius = "999px";
+
+    const colors = {
+      ok:   "linear-gradient(135deg,#10b981,#06b6d4)",
+      warn: "linear-gradient(135deg,#f59e0b,#ef4444)",
+      info: "linear-gradient(135deg,#4f46e5,#06b6d4)",
+      bad:  "linear-gradient(135deg,#ef4444,#f59e0b)",
+    };
+    dot.style.background = colors[kind] || colors.info;
+
+    t.appendChild(left);
+    t.appendChild(dot);
+
+    host.appendChild(t);
+
+    setTimeout(() => {
+      t.style.opacity = "0";
+      t.style.transform = "translateY(8px)";
+      t.style.transition = "opacity .25s ease, transform .25s ease";
+      setTimeout(() => t.remove(), 260);
+    }, 1400);
+  }
+
+  // Expose for other blocks to use
+  window.ptToast = toast;
+
+  // Patch a few common actions to toast on success/failure (safe wrappers)
+
+  // 1) When metaLine changes to "OK"ish, toast once (optional)
+  const meta = document.getElementById("metaLine");
+  if (meta && !meta.__ptHooked) {
+    meta.__ptHooked = true;
+    const obs = new MutationObserver(() => {
+      const txt = (meta.textContent || "").toLowerCase();
+      if (txt.includes("ok") || txt.includes("warmed") || txt.includes("import")) {
+        // Avoid spamming: only toast short messages
+        const shortMsg = meta.textContent.slice(0, 80);
+        toast(shortMsg, "ok");
+      }
+      if (txt.includes("failed") || txt.includes("error")) {
+        const shortMsg = meta.textContent.slice(0, 80);
+        toast(shortMsg, "bad");
+      }
+    });
+    obs.observe(meta, { childList: true, subtree: true });
+  }
+
+  // 2) Upgrade Copy buttons (if present) to toast too
+  document.addEventListener("click", (e) => {
+    const btn = e.target;
+    if (!btn || btn.tagName !== "BUTTON") return;
+    const text = (btn.textContent || "").toLowerCase();
+    if (text.includes("copied")) toast("Copied ✅", "ok");
+  });
+
+  function init() {
+    ensureTitleEl();
+    setTitleAndStatus();
+    window.addEventListener("hashchange", setTitleAndStatus);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+
+// ===========================
+// NEXT BLOCK: Teams -> Players -> Player Stats page (client-side from /api/db/export)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_TEAMS_PAGE__) return;
+  globalThis.__PT_TEAMS_PAGE__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  async function apiGet(url) {
+    const res = await fetch(url, { headers: { "Accept": "application/json" } });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const detail = data && data.error ? data.error : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function num(x) {
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function avg(arr) {
+    const xs = arr.map(num).filter((x) => x !== null);
+    if (!xs.length) return null;
+    return xs.reduce((a, b) => a + b, 0) / xs.length;
+  }
+
+  function fmt(n, d = 1) {
+    const v = num(n);
+    return v === null ? "" : v.toFixed(d);
+  }
+
+  function sortByDateDesc(a, b) {
+    const da = String(a.gameDate || "");
+    const db = String(b.gameDate || "");
+    return db.localeCompare(da);
+  }
+
+  // Build player->team mapping:
+  // 1) prefer gameLog.team if present
+  // 2) else fallback to props lines team by playerId/playerName (best-effort)
+  function buildTeamIndex(db) {
+    const logs = Array.isArray(db.nbaPlayerGameLogs) ? db.nbaPlayerGameLogs : [];
+    const sgo = Array.isArray(db.sgoPropLines) ? db.sgoPropLines : [];
+    const hr  = Array.isArray(db.hardrockPropLines) ? db.hardrockPropLines : [];
+
+    const propsAll = [...sgo, ...hr];
+
+    const teamByPlayerId = new Map();
+    const teamByPlayerName = new Map();
+
+    // from props
+    for (const p of propsAll) {
+      const t = (p.team || "").trim();
+      if (!t) continue;
+      if (p.playerId) teamByPlayerId.set(String(p.playerId), t);
+      if (p.playerName) teamByPlayerName.set(String(p.playerName), t);
+    }
+
+    // from logs
+    for (const g of logs) {
+      const t = (g.team || g.teamAbbr || "").trim();
+      if (!t) continue;
+      if (g.playerId) teamByPlayerId.set(String(g.playerId), t);
+      if (g.playerName) teamByPlayerName.set(String(g.playerName), t);
+    }
+
+    // team -> players -> games
+    const teams = new Map();
+
+    for (const g of logs) {
+      const pid = g.playerId ? String(g.playerId) : "";
+      const pname = g.playerName ? String(g.playerName) : "Unknown";
+      const t =
+        (g.team || g.teamAbbr || "").trim() ||
+        (pid && teamByPlayerId.get(pid)) ||
+        (pname && teamByPlayerName.get(pname)) ||
+        "UNK";
+
+      if (!teams.has(t)) teams.set(t, new Map());
+      const players = teams.get(t);
+
+      const key = pid || pname;
+      if (!players.has(key)) players.set(key, { playerId: pid, playerName: pname, team: t, games: [] });
+      players.get(key).games.push(g);
+    }
+
+    // sort games per player
+    for (const [, players] of teams) {
+      for (const [, p] of players) p.games.sort(sortByDateDesc);
+    }
+
+    return teams;
+  }
+
+  function computePlayerMetrics(player) {
+    const games = player.games || [];
+    const gp = games.length;
+
+    const takeN = (n) => games.slice(0, n);
+
+    const l5 = takeN(5);
+    const l10 = takeN(10);
+
+    const metric = (arr, key) => avg(arr.map((g) => g[key]));
+
+    const pts5  = metric(l5, "pts");
+    const reb5  = metric(l5, "reb");
+    const ast5  = metric(l5, "ast");
+    const tpm5  = metric(l5, "fg3m");
+
+    const pts10 = metric(l10, "pts");
+    const reb10 = metric(l10, "reb");
+    const ast10 = metric(l10, "ast");
+    const tpm10 = metric(l10, "fg3m");
+
+    const ptsAll = metric(games, "pts");
+    const rebAll = metric(games, "reb");
+    const astAll = metric(games, "ast");
+    const tpmAll = metric(games, "fg3m");
+
+    // simple “trend”: L5 - L10 (positive = heating up)
+    const trendPts = (pts5 !== null && pts10 !== null) ? (pts5 - pts10) : null;
+
+    return {
+      gp,
+      pts5, reb5, ast5, tpm5,
+      pts10, reb10, ast10, tpm10,
+      ptsAll, rebAll, astAll, tpmAll,
+      trendPts
+    };
+  }
+
+  function ensureTeamsSection() {
+    if ($("ptTeamsPage")) return;
+
+    const main = document.querySelector("main") || document.body;
+
+    const sec = document.createElement("section");
+    sec.id = "ptTeamsPage";
+    sec.style.display = "none"; // shown when hash #teams
+    sec.style.borderRadius = "18px";
+
+    sec.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="font-weight:950;font-size:16px;">Teams</div>
+        <div class="muted" id="ptTeamsMeta">Loading…</div>
+      </div>
+
+      <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <input id="ptTeamSearch" placeholder="Search team (e.g. BOS) or player…" style="flex:1; min-width:220px;" />
+        <select id="ptTeamSort" style="max-width:240px;">
+          <option value="pts5">Sort players: PTS L5</option>
+          <option value="pts10">Sort players: PTS L10</option>
+          <option value="trendPts">Sort players: Trend PTS (L5-L10)</option>
+          <option value="reb5">Sort players: REB L5</option>
+          <option value="ast5">Sort players: AST L5</option>
+          <option value="tpm5">Sort players: 3PM L5</option>
+          <option value="gp">Sort players: GP</option>
+          <option value="name">Sort players: Name A→Z</option>
+        </select>
+        <button id="ptTeamsRefreshBtn" type="button">Refresh Teams</button>
+      </div>
+
+      <div style="margin-top:12px; display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px;">
+        <div>
+          <div class="muted" style="font-weight:900;margin-bottom:6px;">Team List</div>
+          <div id="ptTeamsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+
+        <div>
+          <div class="muted" style="font-weight:900;margin-bottom:6px;">Players (tap a player)</div>
+          <div id="ptPlayersList"></div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;">
+        <div class="muted" style="font-weight:900;margin-bottom:6px;">Player Details</div>
+        <div id="ptPlayerDetail" class="muted">Pick a team, then a player.</div>
+      </div>
+    `;
+
+    main.appendChild(sec);
+  }
+
+  function addTeamsToNav() {
+    // Top nav bar
+    const top = document.getElementById("ptNavBar");
+    if (top && !top.querySelector('[data-page="teams"]')) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = "Teams";
+      b.dataset.page = "teams";
+      b.style.padding = "10px 12px";
+      b.style.borderRadius = "14px";
+      b.style.fontWeight = "900";
+      b.style.border = "1px solid rgba(226,232,240,.95)";
+      b.style.background = "rgba(255,255,255,.85)";
+      b.addEventListener("click", () => (location.hash = "#teams"));
+      top.appendChild(b);
+    }
+
+    // Bottom nav bar
+    const bottom = document.getElementById("ptBottomNav");
+    if (bottom && !bottom.querySelector('[data-page="teams"]')) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ptNavItem";
+      b.dataset.page = "teams";
+
+      const icon = document.createElement("div");
+      icon.className = "ptIcon";
+      icon.textContent = "👥";
+
+      const label = document.createElement("div");
+      label.textContent = "Teams";
+
+      b.appendChild(icon);
+      b.appendChild(label);
+
+      b.addEventListener("click", () => (location.hash = "#teams"));
+      bottom.appendChild(b);
+    }
+  }
+
+  function showOnlyTeamsPage() {
+    // Hide common sections (best effort) when on #teams
+    const ids = ["quickLinks", "leaders", "edges", "sgoProps", "status", "ptArchivePanel"];
+    for (const id of ids) {
+      const node = $(id);
+      if (!node) continue;
+      const sec = node.closest("section") || node;
+      sec.style.display = "none";
+    }
+    // hide helper bars if present
+    const h1 = document.getElementById("edgesTabs"); if (h1) h1.style.display = "none";
+    const h2 = document.getElementById("sgoImportBar"); if (h2) h2.style.display = "none";
+
+    // show teams page
+    const teams = $("ptTeamsPage");
+    if (teams) teams.style.display = "";
+  }
+
+  function hideTeamsPage() {
+    const teams = $("ptTeamsPage");
+    if (teams) teams.style.display = "none";
+  }
+
+  function isTeamsHash() {
+    return (location.hash || "").toLowerCase() === "#teams";
+  }
+
+  function renderTeamsUI(teamsIndex, opts) {
+    const meta = $("ptTeamsMeta");
+    const teamsList = $("ptTeamsList");
+    const playersList = $("ptPlayersList");
+    const detail = $("ptPlayerDetail");
+    if (!teamsList || !playersList || !detail) return;
+
+    const teamSearch = ($("ptTeamSearch")?.value || "").trim().toLowerCase();
+
+    meta.textContent = `teams: ${teamsIndex.size} • logs loaded`;
+
+    teamsList.innerHTML = "";
+    playersList.innerHTML = "";
+    detail.innerHTML = "Pick a team, then a player.";
+
+    const teamKeys = [...teamsIndex.keys()].sort((a, b) => a.localeCompare(b));
+
+    for (const team of teamKeys) {
+      if (teamSearch && !team.toLowerCase().includes(teamSearch)) {
+        // allow search by player too, so we won't filter teams here too aggressively
+      }
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = team;
+      btn.style.textAlign = "left";
+      btn.style.width = "100%";
+      btn.style.padding = "10px 12px";
+      btn.style.borderRadius = "14px";
+
+      btn.addEventListener("click", () => {
+        renderTeamPlayers(team, teamsIndex.get(team));
+      });
+
+      teamsList.appendChild(btn);
+    }
+
+    function renderTeamPlayers(team, playersMap) {
+      playersList.innerHTML = "";
+
+      const players = [...playersMap.values()].map((p) => {
+        const m = computePlayerMetrics(p);
+        return { ...p, m };
+      });
+
+      const sortKey = ($("ptTeamSort")?.value || "pts5");
+      players.sort((a, b) => {
+        if (sortKey === "name") return String(a.playerName).localeCompare(String(b.playerName));
+        const av = a.m[sortKey];
+        const bv = b.m[sortKey];
+        const an = av === null || av === undefined ? -Infinity : Number(av);
+        const bn = bv === null || bv === undefined ? -Infinity : Number(bv);
+        return bn - an;
+      });
+
+      // filter by search: team OR player name
+      const filtered = teamSearch
+        ? players.filter((p) => team.toLowerCase().includes(teamSearch) || String(p.playerName).toLowerCase().includes(teamSearch))
+        : players;
+
+      const box = document.createElement("div");
+      box.style.overflowX = "auto";
+
+      const t = document.createElement("table");
+      t.innerHTML = `
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>GP</th>
+            <th>PTS L5</th>
+            <th>PTS L10</th>
+            <th>Trend</th>
+            <th>REB L5</th>
+            <th>AST L5</th>
+            <th>3PM L5</th>
+          </tr>
+        </thead>
+      `;
+
+      const tb = document.createElement("tbody");
+
+      for (const p of filtered) {
+        const tr = document.createElement("tr");
+        tr.style.cursor = "pointer";
+        tr.innerHTML = `
+          <td style="font-weight:900;">${esc(p.playerName)}</td>
+          <td>${esc(p.m.gp)}</td>
+          <td>${esc(fmt(p.m.pts5, 1))}</td>
+          <td>${esc(fmt(p.m.pts10, 1))}</td>
+          <td>${esc(p.m.trendPts === null ? "" : (p.m.trendPts >= 0 ? "+" : "") + fmt(p.m.trendPts, 1))}</td>
+          <td>${esc(fmt(p.m.reb5, 1))}</td>
+          <td>${esc(fmt(p.m.ast5, 1))}</td>
+          <td>${esc(fmt(p.m.tpm5, 1))}</td>
+        `;
+        tr.addEventListener("click", () => renderPlayerDetail(team, p));
+        tb.appendChild(tr);
+      }
+
+      t.appendChild(tb);
+      box.appendChild(t);
+
+      playersList.appendChild(box);
+
+      // auto open first player
+      if (filtered[0]) renderPlayerDetail(team, filtered[0]);
+    }
+
+    function renderPlayerDetail(team, p) {
+      const g = (p.games || []).slice().sort(sortByDateDesc);
+      const l5 = g.slice(0, 5);
+      const l10 = g.slice(0, 10);
+
+      const block = document.createElement("div");
+      block.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="font-weight:950;font-size:16px;">${esc(team)} • ${esc(p.playerName)}</div>
+          <div class="muted">GP: ${esc(g.length)}</div>
+        </div>
+
+        <div style="margin-top:10px; display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px;">
+          <div style="border:1px solid rgba(226,232,240,.95); border-radius:16px; padding:10px; background:rgba(255,255,255,.85);">
+            <div class="muted" style="font-weight:900;">Last 5 Avg</div>
+            <div style="margin-top:6px; font-weight:900;">PTS ${esc(fmt(avg(l5.map(x=>x.pts)),1))} • REB ${esc(fmt(avg(l5.map(x=>x.reb)),1))} • AST ${esc(fmt(avg(l5.map(x=>x.ast)),1))} • 3PM ${esc(fmt(avg(l5.map(x=>x.fg3m)),1))}</div>
+          </div>
+          <div style="border:1px solid rgba(226,232,240,.95); border-radius:16px; padding:10px; background:rgba(255,255,255,.85);">
+            <div class="muted" style="font-weight:900;">Last 10 Avg</div>
+            <div style="margin-top:6px; font-weight:900;">PTS ${esc(fmt(avg(l10.map(x=>x.pts)),1))} • REB ${esc(fmt(avg(l10.map(x=>x.reb)),1))} • AST ${esc(fmt(avg(l10.map(x=>x.ast)),1))} • 3PM ${esc(fmt(avg(l10.map(x=>x.fg3m)),1))}</div>
+          </div>
+        </div>
+
+        <div class="muted" style="font-weight:900;margin-top:12px;">Recent Games</div>
+        <div style="overflow-x:auto;margin-top:6px;">
+          <table>
+            <thead>
+              <tr><th>Date</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th></tr>
+            </thead>
+            <tbody>
+              ${g.slice(0, 12).map(row => `
+                <tr>
+                  <td>${esc(row.gameDate)}</td>
+                  <td>${esc(row.pts ?? "")}</td>
+                  <td>${esc(row.reb ?? "")}</td>
+                  <td>${esc(row.ast ?? "")}</td>
+                  <td>${esc(row.fg3m ?? "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      const detail = $("ptPlayerDetail");
+      detail.innerHTML = "";
+      detail.appendChild(block);
+    }
+  }
+
+  async function loadTeamsPage() {
+    ensureTeamsSection();
+    addTeamsToNav();
+
+    const meta = $("ptTeamsMeta");
+    const btn = $("ptTeamsRefreshBtn");
+    const search = $("ptTeamSearch");
+    const sort = $("ptTeamSort");
+
+    const refresh = async () => {
+      try {
+        if (meta) meta.textContent = "Loading DB…";
+        const db = await apiGet("/api/db/export");
+        const idx = buildTeamIndex(db);
+        globalThis.__PT_TEAMS_INDEX__ = idx;
+        renderTeamsUI(idx);
+        if (meta) meta.textContent = `teams: ${idx.size} • ready`;
+        if (window.ptToast) window.ptToast("Teams loaded ✅", "ok");
+      } catch (e) {
+        if (meta) meta.textContent = "Failed to load teams";
+        if (window.ptToast) window.ptToast("Teams load failed", "bad");
+        const box = $("errorBox");
+        if (box) { box.textContent = e.message || String(e); box.style.display = "block"; }
+      }
+    };
+
+    if (btn && !btn.__ptHook) {
+      btn.__ptHook = true;
+      btn.addEventListener("click", refresh);
+    }
+
+    // re-render only (no fetch) on search/sort
+    const rerender = () => {
+      const idx = globalThis.__PT_TEAMS_INDEX__;
+      if (idx) renderTeamsUI(idx);
+    };
+    if (search && !search.__ptHook) { search.__ptHook = true; search.addEventListener("input", rerender); }
+    if (sort && !sort.__ptHook) { sort.__ptHook = true; sort.addEventListener("change", rerender); }
+
+    // Load once
+    if (!globalThis.__PT_TEAMS_INDEX__) await refresh();
+  }
+
+  function handleHash() {
+    if (isTeamsHash()) {
+      showOnlyTeamsPage();
+      loadTeamsPage();
+    } else {
+      hideTeamsPage();
+    }
+  }
+
+  // init
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      handleHash();
+      window.addEventListener("hashchange", handleHash);
+    });
+  } else {
+    handleHash();
+    window.addEventListener("hashchange", handleHash);
+  }
+})();
+
+// ===========================
+// FIX BLOCK: Ensure Teams tab exists (top nav + bottom nav + fallback button)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_FORCE_TEAMS_TAB__) return;
+  globalThis.__PT_FORCE_TEAMS_TAB__ = true;
+
+  function addTopTeams() {
+    const top = document.getElementById("ptNavBar");
+    if (!top) return false;
+    if (top.querySelector('[data-page="teams"]')) return true;
+
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "Teams";
+    b.dataset.page = "teams";
+    b.style.padding = "10px 12px";
+    b.style.borderRadius = "14px";
+    b.style.fontWeight = "900";
+    b.style.border = "1px solid rgba(226,232,240,.95)";
+    b.style.background = "rgba(255,255,255,.85)";
+    b.addEventListener("click", () => (location.hash = "#teams"));
+    top.appendChild(b);
+    return true;
+  }
+
+  function addBottomTeams() {
+    const bottom = document.getElementById("ptBottomNav");
+    if (!bottom) return false;
+    if (bottom.querySelector('[data-page="teams"]')) return true;
+
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ptNavItem";
+    b.dataset.page = "teams";
+
+    const icon = document.createElement("div");
+    icon.className = "ptIcon";
+    icon.textContent = "👥";
+
+    const label = document.createElement("div");
+    label.textContent = "Teams";
+
+    b.appendChild(icon);
+    b.appendChild(label);
+    b.addEventListener("click", () => (location.hash = "#teams"));
+
+    bottom.appendChild(b);
+    return true;
+  }
+
+  function addFallbackButton() {
+    if (document.getElementById("ptTeamsFallbackBtn")) return;
+
+    const header = document.querySelector("header") || document.body;
+
+    const wrap = document.createElement("div");
+    wrap.style.marginTop = "10px";
+    wrap.style.display = "flex";
+    wrap.style.gap = "10px";
+    wrap.style.flexWrap = "wrap";
+
+    const b = document.createElement("button");
+    b.id = "ptTeamsFallbackBtn";
+    b.type = "button";
+    b.textContent = "Open Teams";
+    b.style.padding = "10px 12px";
+    b.style.borderRadius = "14px";
+    b.style.fontWeight = "900";
+    b.addEventListener("click", () => (location.hash = "#teams"));
+
+    wrap.appendChild(b);
+    header.appendChild(wrap);
+  }
+
+  function ensureTeamsSectionExists() {
+    if (document.getElementById("ptTeamsPage")) return;
+
+    const main = document.querySelector("main") || document.body;
+    const sec = document.createElement("section");
+    sec.id = "ptTeamsPage";
+    sec.style.display = "none";
+    sec.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="font-weight:950;font-size:16px;">Teams</div>
+        <div class="muted">Open Teams from the menu</div>
+      </div>
+      <div class="muted" style="margin-top:10px;">If you still don’t see Teams, refresh the page after saving app.js.</div>
+    `;
+    main.appendChild(sec);
+  }
+
+  function run() {
+    ensureTeamsSectionExists();
+
+    const topOk = addTopTeams();
+    const bottomOk = addBottomTeams();
+
+    if (!topOk && !bottomOk) addFallbackButton();
+  }
+
+  // run now + again shortly (in case nav loads after)
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      run();
+      setTimeout(run, 300);
+      setTimeout(run, 1200);
+    });
+  } else {
+    run();
+    setTimeout(run, 300);
+    setTimeout(run, 1200);
+  }
+})();
+
