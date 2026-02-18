@@ -2554,3 +2554,163 @@ function wireUI() {
   }
 })();
 
+// ===========================
+// NEXT BLOCK: Pretty Leaders UI (colorful cards, mobile-friendly)
+// Append-only. Paste at bottom of public/app.js
+// ===========================
+
+(function () {
+  "use strict";
+  if (globalThis.__PT_PRETTY_LEADERS__) return;
+  globalThis.__PT_PRETTY_LEADERS__ = true;
+
+  const $ = (id) => document.getElementById(id);
+
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function badge(text, kind) {
+    const b = document.createElement("span");
+    b.textContent = text;
+    b.style.display = "inline-flex";
+    b.style.alignItems = "center";
+    b.style.gap = "6px";
+    b.style.padding = "4px 10px";
+    b.style.borderRadius = "999px";
+    b.style.fontSize = "12px";
+    b.style.fontWeight = "700";
+
+    const styles = {
+      indigo: { bg: "rgba(79,70,229,.12)", bd: "rgba(79,70,229,.25)", fg: "#1f2a85" },
+      cyan:   { bg: "rgba(6,182,212,.12)", bd: "rgba(6,182,212,.25)", fg: "#0b5460" },
+      green:  { bg: "rgba(16,185,129,.12)", bd: "rgba(16,185,129,.25)", fg: "#0b5a3e" },
+      amber:  { bg: "rgba(245,158,11,.14)", bd: "rgba(245,158,11,.25)", fg: "#7a4b00" },
+    };
+    const c = styles[kind] || styles.indigo;
+    b.style.background = c.bg;
+    b.style.border = `1px solid ${c.bd}`;
+    b.style.color = c.fg;
+    return b;
+  }
+
+  function makeCard(title, kind) {
+    const card = document.createElement("div");
+    card.style.border = "1px solid rgba(226,232,240,.9)";
+    card.style.borderRadius = "16px";
+    card.style.padding = "12px";
+    card.style.boxShadow = "0 10px 22px rgba(15,23,42,.06)";
+    card.style.background = "linear-gradient(135deg, rgba(255,255,255,.95), rgba(246,248,255,.95))";
+
+    const head = document.createElement("div");
+    head.style.display = "flex";
+    head.style.justifyContent = "space-between";
+    head.style.alignItems = "center";
+    head.style.gap = "10px";
+    head.style.marginBottom = "10px";
+
+    const h = document.createElement("div");
+    h.textContent = title;
+    h.style.fontWeight = "800";
+    h.style.fontSize = "15px";
+
+    head.appendChild(h);
+    head.appendChild(badge("Top 25", kind));
+
+    card.appendChild(head);
+    return card;
+  }
+
+  function row(rank, name, gp, perGame) {
+    const r = document.createElement("div");
+    r.style.display = "grid";
+    r.style.gridTemplateColumns = "32px 1fr 60px 70px";
+    r.style.gap = "8px";
+    r.style.alignItems = "center";
+    r.style.padding = "8px 6px";
+    r.style.borderTop = "1px solid rgba(226,232,240,.75)";
+
+    const a = document.createElement("div");
+    a.textContent = rank;
+    a.style.fontWeight = "800";
+    a.style.opacity = ".7";
+
+    const b = document.createElement("div");
+    b.innerHTML = `<div style="font-weight:750">${esc(name)}</div>`;
+
+    const c = document.createElement("div");
+    c.innerHTML = `<div class="muted" style="text-align:right">GP</div><div style="text-align:right;font-weight:750">${esc(gp)}</div>`;
+
+    const d = document.createElement("div");
+    d.innerHTML = `<div class="muted" style="text-align:right">AVG</div><div style="text-align:right;font-weight:800">${esc(perGame)}</div>`;
+
+    r.appendChild(a); r.appendChild(b); r.appendChild(c); r.appendChild(d);
+    return r;
+  }
+
+  function renderGroup(list, title, kind) {
+    const card = makeCard(title, kind);
+
+    const body = document.createElement("div");
+    body.style.display = "flex";
+    body.style.flexDirection = "column";
+
+    if (!Array.isArray(list) || list.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.style.padding = "10px 6px";
+      empty.textContent = "No data yet. Import nbaPlayerGameLogs first.";
+      body.appendChild(empty);
+      card.appendChild(body);
+      return card;
+    }
+
+    list.slice(0, 25).forEach((r, i) => {
+      body.appendChild(
+        row(
+          String(i + 1),
+          r.playerName || r.playerId || "Unknown",
+          r.gp ?? "",
+          r.perGame ?? ""
+        )
+      );
+    });
+
+    card.appendChild(body);
+    return card;
+  }
+
+  // Override renderLeaders (your refreshAll calls renderLeaders(leaders))
+  window.renderLeaders = function prettyLeaders(data) {
+    const wrap = $("leaders");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.style.marginBottom = "10px";
+    meta.textContent = data.cached
+      ? `cached: true • ts: ${data.ts}`
+      : "cached: false (computed on request)";
+    wrap.appendChild(meta);
+
+    const grid = document.createElement("div");
+    grid.style.display = "grid";
+    grid.style.gridTemplateColumns = "repeat(auto-fit, minmax(260px, 1fr))";
+    grid.style.gap = "12px";
+
+    const leaders = data.leaders || {};
+    grid.appendChild(renderGroup(leaders.points || [], "Points Leaders", "indigo"));
+    grid.appendChild(renderGroup(leaders.rebounds || [], "Rebounds Leaders", "green"));
+    grid.appendChild(renderGroup(leaders.assists || [], "Assists Leaders", "cyan"));
+    grid.appendChild(renderGroup(leaders.threes || [], "3PM Leaders", "amber"));
+
+    wrap.appendChild(grid);
+  };
+})();
+
